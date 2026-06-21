@@ -24,8 +24,13 @@ def run() -> int:
                           capture_output=True).returncode != 0:
             subprocess.run([sys.executable, "-m", "pip", "install", "--user",
                             "--break-system-packages", "--upgrade", str(src)], capture_output=True)
-    # Reload the running dashboard (cron brings it back on the new code within a minute).
+    # Reload the dashboard on the new code — restart it IMMEDIATELY (don't leave a gap until the
+    # next cron tick). Kill it, then kick the launcher so it comes straight back.
+    from . import config
     if shutil.which("pkill"):
         subprocess.run(["pkill", "-f", "agentsmon dashboard"], capture_output=True)
-    print("✓ Updated. Dashboard/keepalive reload via cron. Add new bots with:  agentsmon add")
+    launcher = config.state_dir() / "agentsmon-launch.sh"
+    if launcher.exists():
+        subprocess.run(["sh", str(launcher)], capture_output=True)
+    print("✓ Updated and reloaded. Add new bots with:  agentsmon add")
     return 0
