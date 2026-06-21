@@ -6,20 +6,36 @@ config, and installs the boot service. Designed to need almost no typing.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 from . import config, detect, service
 
-#: Default restart command per detected kind. ``{id}`` is filled with the session id when known.
+#: Auto-derived restart command per kind ({id} = session id). Includes the "run unattended" flag,
+#: since a supervised agent must come back able to work without an approval prompt.
 RESTART_DEFAULTS = {
-    "claude-code": "claude --resume {id}",
-    "codex": "codex resume {id}",
+    "claude-code": "claude --dangerously-skip-permissions --resume {id}",
+    "codex": "codex --dangerously-bypass-approvals-and-sandbox resume {id}",
+    "antigravity": "agy --conversation {id} --dangerously-skip-permissions",
     "aider": "aider",
     "gemini": "gemini",
 }
-MATCH_KEYWORD = {"claude-code": "claude", "codex": "codex", "aider": "aider", "gemini": "gemini"}
+MATCH_KEYWORD = {"claude-code": "claude", "codex": "codex", "antigravity": "agy",
+                 "aider": "aider", "gemini": "gemini"}
+
+
+def _auto_restart(a: dict) -> str:
+    """Build the restart command for a detected agent — no user typing needed."""
+    tpl = RESTART_DEFAULTS.get(a["kind"], "")
+    if not tpl:
+        return ""
+    sid = a.get("session_id")
+    if sid:
+        return tpl.replace("{id}", sid)
+    # No session id → drop the resume/conversation argument, keep the base launch.
+    return re.sub(r"\s*(--resume|resume|--conversation)\s*\{id\}", "", tpl).strip()
 COMMON_DAEMONS = [
     {"name": "OpenClaw", "pattern": "openclaw", "health_url": "http://127.0.0.1:18789/health",
      "restart": "nohup openclaw gateway > ~/openclaw.log 2>&1 &"},
@@ -74,38 +90,34 @@ def run() -> int:
     for a in live:
         if not _yes(f"Supervise '{a['name']}' ({a['label']})?"):
             continue
-        kind = a["kind"]
-        match = MATCH_KEYWORD.get(kind, kind)
-        default_restart = RESTART_DEFAULTS.get(kind, "")
-        if a.get("session_id"):
-            default_restart = default_restart.replace("{id}", a["session_id"])
-        else:
-            default_restart = default_restart.replace(" {id}", "").replace("{id}", "")
-        restart = _ask(f"    restart command for '{a['name']}'", default_restart)
-        cwd = _ask("    working directory", str(Path.home()))
-        agents.append({"name": a["name"], "label": a["label"], "match": match,
+        restart = _auto_restart(a)                              # auto — no typing
+        cwd = detect._session_cwd(a["name"]) or str(Path.home())  # auto from the tmux pane
+        agents.append({"name": a["name"], "label": a["label"],
+                       "match": MATCH_KEYWORD.get(a["kind"], a["kind"]),
                        "restart": restart, "cwd": cwd, "enabled": True})
+        print(f"    ↻ auto restart: {restart or '(none)'}")
 
     daemons = []
     for d in COMMON_DAEMONS:
         if subprocess.run(["pgrep", "-f", d["pattern"]], capture_output=True).returncode == 0:
             if _yes(f"Watch daemon '{d['name']}' (detected running)?"):
-                entry = {k: v for k, v in d.items() if k != "restart"}
-                # A restart command lets keepalive revive it (and start it on boot); empty = monitor only.
-                restart = _ask(f"    restart command for '{d['name']}' if it dies "
-                               "(empty = monitor only)", d.get("restart", ""))
-                if restart:
-                    entry["restart"] = restart
-                daemons.append(entry)
+                daemons.append(dict(d))                         # includes its default restart
+                if d.get("restart"):
+                    print(f"    ↻ auto restart: {d['restart']}")
 
-    port = _ask("\nDashboard port", "8765")
-    host = _ask("Dashboard host (127.0.0.1 = this machine only)", "127.0.0.1")
+    # Dashboard reach: localhost always works; ask whether to also expose it on the machine's IP.
+    print("\nThe dashboard is always reachable on this machine (http://127.0.0.1).")
+    expose = _yes("Also make it reachable from outside — on the server's IP / the internet?",
+                  default_yes=False)
+    host = "0.0.0.0" if expose else "127.0.0.1"
+    port = _ask("Dashboard port", "8765")
 
-    # HTTP auth — recommended whenever the dashboard isn't bound to localhost.
     cfg = config.load()
     cfg["dashboard"].update({"host": host, "port": int(port) if port.isdigit() else 8765})
-    remote = host not in ("127.0.0.1", "localhost", "::1")
-    if _yes("Protect the dashboard with a login (HTTP auth)?", default_yes=remote):
+    if expose:
+        print("⚠️  Exposed beyond localhost — a login is strongly recommended.")
+    # HTTP auth — default yes when exposed.
+    if _yes("Protect the dashboard with a login (HTTP auth)?", default_yes=expose):
         from . import dashboard
         user = _ask("    username", "admin")
         pw = _ask_secret("    password (hidden)")
