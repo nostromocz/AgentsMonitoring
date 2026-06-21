@@ -24,9 +24,13 @@ DEFAULTS = {
     # restart (shell command to relaunch in a fresh session; empty = just recreate the session),
     # cwd, enabled.
     "agents": [],
-    # Background daemons to watch (not in tmux). Each: name, pattern (pgrep -f), health_url?, restart?
+    # Background daemons to watch live (not in tmux), no history. Each: name, pattern, health_url?, restart?
     "daemons": [],
-    "dashboard": {"host": "127.0.0.1", "port": 8765, "poll_seconds": 15, "history_days": 14},
+    # Services to track with uptime history + SLA + timeline. Each: name, process (pgrep), health_url?
+    # Rendered as their own dashboard card (e.g. "Multi-agent system availability", "Telegram Bridge Status").
+    "services": [],
+    "dashboard": {"host": "127.0.0.1", "port": 8765, "poll_seconds": 15},
+    "probe": {"interval_seconds": 60, "sla_window_days": 90, "timeline_days": 90},
     "keepalive": {"enabled": True, "interval_seconds": 60},
 }
 

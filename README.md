@@ -112,6 +112,12 @@ username + password (defaulting to *yes* whenever you bind it to anything other 
 If enabled, the dashboard requires HTTP Basic auth; the password is stored only as a SHA-256
 hash (`dashboard.auth.pwhash`), never in plaintext. Remove the `auth` block to turn it off.
 
+- **services[]** — components you want **uptime history + SLA** for (a gateway, a bridge, a
+  daemon): each has a `name` (its dashboard card title), a `process` pattern and/or a
+  `health_url`. The dashboard probes them on `probe.interval_seconds`, stores samples in a local
+  SQLite, and renders a card with current status, **current uptime**, **SLA %** over
+  `probe.sla_window_days`, and a timeline. (e.g. cards "Multi-agent system availability" and
+  "Telegram Bridge Status".)
 - **agents[].match** — a substring of the agent's process command line that means "alive".
 - **agents[].restart** — shell command run in the session to relaunch the agent (empty = just
   recreate the tmux session). Without it, a dead agent can be detected but not revived.
