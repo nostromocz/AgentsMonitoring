@@ -36,6 +36,20 @@ def _auto_restart(a: dict) -> str:
         return tpl.replace("{id}", sid)
     # No session id → drop the resume/conversation argument, keep the base launch.
     return re.sub(r"\s*(--resume|resume|--conversation)\s*\{id\}", "", tpl).strip()
+
+
+def primary_ip() -> str:
+    """This machine's primary outbound IP — the usable address when the dashboard is exposed
+    (``0.0.0.0``). Falls back to localhost if offline."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 COMMON_DAEMONS = [
     {"name": "OpenClaw", "pattern": "openclaw", "health_url": "http://127.0.0.1:18789/health",
      "restart": "nohup openclaw gateway > ~/openclaw.log 2>&1 &"},
@@ -137,5 +151,8 @@ def run() -> int:
     if _yes("\nInstall the boot service now (keepalive + dashboard, start on login/boot)?"):
         service.install()
     print("\nAll set. Check status anytime with:  agentsmon status")
-    print(f"Dashboard: http://{host}:{port}")
+    if host in ("0.0.0.0", "::"):
+        print(f"Dashboard: http://{primary_ip()}:{port}   (local: http://127.0.0.1:{port})")
+    else:
+        print(f"Dashboard: http://127.0.0.1:{port}")
     return 0

@@ -71,7 +71,13 @@ def install() -> int:
     if proc.returncode != 0:
         print(f"✗ couldn't update crontab: {proc.stderr.strip()}")
         return 1
-    # Kick it once now so the dashboard comes up immediately.
+    # Stop any dashboard already running, so the launcher restarts it with the CURRENT config
+    # (host/port/auth). Without this, a re-run can't change a live dashboard — its pgrep guard
+    # would just leave the stale one bound to the old address. (Safe: our own process is
+    # "agentsmon setup/service", not "agentsmon dashboard".)
+    if shutil.which("pkill"):
+        subprocess.run(["pkill", "-f", "agentsmon dashboard"], capture_output=True)
+    # Kick it once now so the dashboard comes up immediately on the configured host.
     subprocess.run(["sh", str(launcher)], capture_output=True)
     print("  ✓ installed cron launcher (@reboot + every minute) — survives logout/reboot.")
     print(f"    launcher: {launcher}")
