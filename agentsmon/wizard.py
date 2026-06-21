@@ -54,7 +54,7 @@ COMMON_DAEMONS = [
     {"name": "OpenClaw", "pattern": "openclaw", "binary": "openclaw",
      "health_url": "http://127.0.0.1:18789/health",
      "restart": "nohup openclaw gateway > ~/openclaw.log 2>&1 &"},
-    {"name": "Hermes", "pattern": "hermes_cli.main gateway", "binary": "hermes",
+    {"name": "Hermes", "pattern": "hermes.* gateway", "binary": "hermes",
      "restart": "nohup hermes gateway run --replace > ~/hermes.log 2>&1 &"},
 ]
 
