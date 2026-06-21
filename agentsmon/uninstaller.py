@@ -1,8 +1,7 @@
-"""`agentsmon uninstall` — stop the services and remove config + state."""
+"""`agentsmon uninstall` — stop the dashboard/keepalive and remove config + state."""
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,7 +10,7 @@ from . import config, service
 
 
 def run(yes: bool = False) -> int:
-    print("This stops the keepalive + dashboard services and removes config + state.")
+    print("This stops the dashboard + keepalive and removes config + state.")
     if not yes:
         try:
             if input("Continue? (y/N): ").strip().lower() not in ("y", "yes"):
@@ -21,22 +20,13 @@ def run(yes: bool = False) -> int:
             print("Aborted — no terminal; rerun with --yes.")
             return 0
 
-    system = platform.system()
-    if system == "Darwin":
-        uid = os.getuid()
-        for label in (service.LABEL_KA, service.LABEL_DB):
-            subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
-            p = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-            if p.exists():
-                p.unlink()
-                print(f"  removed {p.name}")
-    elif system == "Linux":
-        for unit in ("agentsmon-keepalive.service", "agentsmon-dashboard.service"):
-            subprocess.run(["systemctl", "--user", "disable", "--now", unit], capture_output=True)
-            p = Path.home() / ".config" / "systemd" / "user" / unit
-            if p.exists():
-                p.unlink()
-                print(f"  removed {unit}")
+    # 1) Remove the cron launcher lines, then stop the running dashboard.
+    service.uninstall_cron()
+    print("  removed cron launcher")
+    if shutil.which("pkill"):
+        subprocess.run(["pkill", "-f", "agentsmon dashboard"], capture_output=True)
+        subprocess.run(["pkill", "-f", "agentsmon keepalive"], capture_output=True)
+        print("  stopped running dashboard/keepalive")
 
     for d in (config.DEFAULT_PATH.parent, Path.home() / ".local" / "state" / "agentsmon",
               Path.home() / ".agentsmon-src"):

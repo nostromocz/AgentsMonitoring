@@ -1,91 +1,93 @@
-"""Boot persistence — install OS services so keepalive + dashboard survive logout/reboot.
+"""Boot persistence — keep the dashboard + keepalive running across reboots.
 
-macOS → two LaunchAgents (``~/Library/LaunchAgents``, RunAtLoad + KeepAlive).
-Linux → two ``systemd --user`` units (with a hint to enable linger for boot-without-login).
-Everything runs as the current user; no root needed.
+We use **cron** (a launcher run `@reboot` and every minute) rather than systemd ``--user`` or a
+macOS LaunchAgent. On a headless server reached over SSH there's often no user D-Bus / systemd
+instance (``systemctl --user`` fails with "Failed to connect to bus: No medium found") and a
+macOS LaunchAgent needs a GUI login session. A cron launcher that nohups the dashboard (guarded
+by pgrep) and runs one keepalive pass works everywhere, no login session required.
 """
 from __future__ import annotations
 
-import os
-import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-LABEL_KA = "com.agentsmon.keepalive"
-LABEL_DB = "com.agentsmon.dashboard"
+import agentsmon
+from . import config
+
+MARKER = "agentsmon-launch.sh"   # identifies our crontab lines
 
 
-def _py() -> str:
+def _python() -> str:
     return sys.executable or "python3"
 
 
-def _plist(label: str, args: list[str]) -> str:
-    body = "".join(f"      <string>{a}</string>\n" for a in [_py(), "-m", "agentsmon", *args])
-    logs = Path.home() / ".local" / "state" / "agentsmon"
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>{label}</string>
-  <key>ProgramArguments</key><array>
-{body}  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>{logs}/{label}.out.log</string>
-  <key>StandardErrorPath</key><string>{logs}/{label}.err.log</string>
-  <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-  </dict>
-</dict></plist>
-"""
+def _pythonpath() -> str:
+    # Parent of the package dir, so the launcher imports agentsmon whether pip-installed or run
+    # straight from a clone.
+    return str(Path(agentsmon.__file__).resolve().parent.parent)
 
 
-def _systemd_unit(desc: str, args: list[str]) -> str:
-    exec_start = " ".join([_py(), "-m", "agentsmon", *args])
-    return f"""[Unit]
-Description={desc}
-After=default.target
+def _launcher_path() -> Path:
+    return config.state_dir() / MARKER
 
-[Service]
-ExecStart={exec_start}
-Restart=always
-RestartSec=10
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
-[Install]
-WantedBy=default.target
-"""
+def _write_launcher() -> Path:
+    state = config.state_dir()
+    log = state / "agentsmon.log"
+    path = _launcher_path()
+    path.write_text(f"""#!/bin/sh
+# Agents Monitoring launcher — started by cron (@reboot + every minute). Idempotent: starts the
+# dashboard only if it isn't running, then runs one keepalive pass (a no-op if disabled / no agents).
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PYTHONPATH="{_pythonpath()}"
+PY="{_python()}"
+mkdir -p "{state}"
+pgrep -f "agentsmon dashboard" >/dev/null 2>&1 || \\
+  nohup "$PY" -m agentsmon dashboard >> "{log}" 2>&1 &
+"$PY" -m agentsmon keepalive >> "{log}" 2>&1
+""", encoding="utf-8")
+    path.chmod(0o755)
+    return path
 
 
 def install() -> int:
-    system = platform.system()
-    (Path.home() / ".local" / "state" / "agentsmon").mkdir(parents=True, exist_ok=True)
-    if system == "Darwin":
-        d = Path.home() / "Library" / "LaunchAgents"
-        d.mkdir(parents=True, exist_ok=True)
-        for label, args in ((LABEL_KA, ["keepalive", "--loop"]), (LABEL_DB, ["dashboard"])):
-            path = d / f"{label}.plist"
-            path.write_text(_plist(label, args), encoding="utf-8")
-            uid = os.getuid()
-            subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
-            subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(path)], capture_output=True)
-            print(f"  ✓ loaded {label}")
-        print("Installed LaunchAgents (start at login + restart on crash).")
-        return 0
-    if system == "Linux":
-        d = Path.home() / ".config" / "systemd" / "user"
-        d.mkdir(parents=True, exist_ok=True)
-        for unit, desc, args in (("agentsmon-keepalive.service", "Agents Monitoring keepalive", ["keepalive", "--loop"]),
-                                 ("agentsmon-dashboard.service", "Agents Monitoring dashboard", ["dashboard"])):
-            (d / unit).write_text(_systemd_unit(desc, args), encoding="utf-8")
-            subprocess.run(["systemctl", "--user", "enable", "--now", unit], capture_output=True)
-            print(f"  ✓ enabled {unit}")
-        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-        print("Installed systemd --user units. For boot-without-login run:  loginctl enable-linger $USER")
-        return 0
-    print(f"Unsupported OS '{system}'. Run `agentsmon keepalive --loop` and `agentsmon dashboard` "
-          "under your own process manager.")
-    return 1
+    if not shutil.which("cron") and not shutil.which("crontab"):
+        print("⚠️  crontab not found. Run these yourself under any process manager:")
+        print(f"    {_python()} -m agentsmon dashboard &")
+        print(f"    {_python()} -m agentsmon keepalive --loop &")
+        return 1
+    launcher = _write_launcher()
+    try:
+        existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
+    except OSError:
+        existing = ""
+    lines = [ln for ln in existing.splitlines() if MARKER not in ln]
+    lines.append(f"@reboot {launcher}")
+    lines.append(f"* * * * * {launcher}")
+    proc = subprocess.run(["crontab", "-"], input="\n".join(lines) + "\n", text=True,
+                          capture_output=True)
+    if proc.returncode != 0:
+        print(f"✗ couldn't update crontab: {proc.stderr.strip()}")
+        return 1
+    # Kick it once now so the dashboard comes up immediately.
+    subprocess.run(["sh", str(launcher)], capture_output=True)
+    print("  ✓ installed cron launcher (@reboot + every minute) — survives logout/reboot.")
+    print(f"    launcher: {launcher}")
+    print("    No systemd/launchd needed; works headless over SSH.")
+    return 0
+
+
+def uninstall_cron() -> None:
+    """Remove our crontab lines (used by the uninstaller)."""
+    try:
+        existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
+    except OSError:
+        return
+    kept = [ln for ln in existing.splitlines() if MARKER not in ln]
+    subprocess.run(["crontab", "-"], input="\n".join(kept) + ("\n" if kept else ""), text=True,
+                   capture_output=True)
 
 
 def main() -> int:

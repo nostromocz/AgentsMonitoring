@@ -101,6 +101,8 @@ def tick(cfg: dict) -> int:
 
 def run(loop: bool = False) -> int:
     cfg = config.load()
+    if not cfg.get("keepalive", {}).get("enabled", True):
+        return 0                       # keepalive disabled — restarts left to the user/another supervisor
     interval = cfg.get("keepalive", {}).get("interval_seconds", 60)
     while True:
         if _acquire_lock():

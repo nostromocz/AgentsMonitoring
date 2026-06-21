@@ -23,8 +23,9 @@ tmux sessions  ⇄  Agents Monitoring  ⇄  status page + keepalive
   classifies what's running (Claude Code / Codex / …). Setup just confirms what it found.
 - **Zero install friction** — pure **Python standard library**. Nothing to `pip install` for it
   to work; if pip is missing it just runs from the clone.
-- **Stays alive across reboots** — installs a LaunchAgent (macOS) or `systemd --user` unit
-  (Linux) for both the keepalive loop and the dashboard.
+- **Stays alive across reboots** — installs a **cron** launcher (`@reboot` + every minute) that
+  nohups the dashboard and runs keepalive. Works headless over SSH, with no `systemd --user` /
+  D-Bus / login-session requirement (the usual "Failed to connect to bus" trap).
 - **Restarts the right way** — a tmux session can outlive a crashed agent; we detect that and
   relaunch the agent (e.g. `claude --resume <id>`), not just recreate an empty shell.
 
