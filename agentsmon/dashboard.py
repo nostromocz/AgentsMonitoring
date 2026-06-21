@@ -314,6 +314,16 @@ def _probe_loop(stop: threading.Event) -> None:
 
 
 def serve(host: str, port: int) -> None:
+    # Bring an older config up to the current schema on startup (e.g. fold per-daemon availability
+    # cards into the synthetic Multi-Agent System card). The dashboard restarts on every update,
+    # so this self-heals existing installs without needing a special migration step.
+    try:
+        from . import wizard
+        cfg0 = config.load()
+        if wizard.migrate_config(cfg0):
+            config.save(cfg0)
+    except Exception:
+        pass
     cfg = config.load()
     poll = cfg.get("dashboard", {}).get("poll_seconds", 15)
     page = PAGE.replace("POLL", str(poll)).encode()
