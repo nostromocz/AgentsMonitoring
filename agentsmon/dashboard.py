@@ -1,13 +1,11 @@
 """Live status web page — `agentsmon dashboard`.
 
 Pure standard-library HTTP server (no Flask/FastAPI). Serves one self-contained page that polls
-``/api/state`` and renders:
-  • Persistent agents      — live tmux agent detection
-  • one card per service   — availability with current status, uptime, SLA % and a timeline
-
-A background thread probes the configured services on an interval and appends to the uptime DB,
-so just leaving the dashboard running builds the history. Binds 127.0.0.1 by default; optional
-HTTP Basic auth (see config.dashboard.auth). All UI text is English.
+``/api/state`` and renders the same layout as a clean status page: a **Persistent agents** table
+and one availability card per **service** (status dot, Uptime / Availability-SLA / Latency
+metrics, and a day-by-day availability timeline). A background thread probes services on an
+interval and appends to the uptime DB, so just leaving the dashboard running builds history.
+Binds 127.0.0.1 by default; optional HTTP Basic auth (config.dashboard.auth). UI text is English.
 """
 from __future__ import annotations
 
@@ -38,66 +36,167 @@ def _auth_ok(header: str | None, user: str, pwhash: str) -> bool:
     return hmac.compare_digest(u, user) and hmac.compare_digest(password_hash(pw), pwhash)
 
 
-PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+PAGE = r"""<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agents Monitoring</title>
-<style>
- :root{color-scheme:dark}
- body{margin:0;background:#0b0f17;color:#e5e9f0;font:15px/1.5 system-ui,-apple-system,sans-serif}
- .wrap{max-width:860px;margin:0 auto;padding:28px 18px}
- h1{font-size:20px;margin:0 0 2px} .sub{color:#8b95a7;font-size:13px;margin-bottom:18px}
- h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#8b95a7;margin:26px 0 10px}
- .card{display:flex;align-items:center;gap:12px;background:#131a26;border:1px solid #1e2737;
-   border-radius:10px;padding:11px 14px;margin:7px 0}
- .dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
- .up{background:#34d399;box-shadow:0 0 8px #34d39988} .down{background:#f87171} .idle{background:#475569}
- .name{font-weight:600} .meta{color:#8b95a7;font-size:13px;margin-left:auto;text-align:right;white-space:nowrap}
- .tag{font-size:11px;color:#9aa6b8;background:#1c2434;border-radius:5px;padding:1px 7px;margin-left:8px}
- .muted{color:#64748b}
- .svc{background:#131a26;border:1px solid #1e2737;border-radius:10px;padding:13px 15px;margin:8px 0}
- .svchead{display:flex;align-items:center;gap:10px}
- .stats{margin-left:auto;text-align:right;font-size:13px;color:#8b95a7}
- .sla{color:#e5e9f0;font-weight:600}
- .tl{display:flex;gap:1px;margin-top:11px;height:26px}
- .tl span{flex:1;border-radius:1px;background:#1e2737}
- .tl .u{background:#34d399} .tl .d{background:#f87171}
-</style></head><body><div class="wrap">
-<h1>🤖 Agents Monitoring</h1>
-<div class="sub" id="sub">loading…</div>
-<h2>Persistent agents</h2><div id="agents"></div>
-<div id="services"></div>
-</div><script>
-function age(s){if(s==null)return "?";let d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
- return d?d+"d "+h+"h":h?h+"h "+m+"m":m+"m";}
-function fmtTime(t){return t?new Date(t*1000).toLocaleString():"–";}
-function agentCard(a){return `<div class="card"><span class="dot ${a.alive?'up':'idle'}"></span>
- <span class="name">${a.name}</span><span class="tag">${a.alive?a.label:'idle'}</span>
- <span class="meta">${a.alive?'running':'idle shell'} · age ${age(a.age)}${a.session_id?` · ${a.session_id.slice(0,8)}`:''}</span></div>`;}
-function timeline(buckets){return `<div class="tl">`+buckets.map(b=>
- `<span class="${b==='up'?'u':b==='down'?'d':''}"></span>`).join("")+`</div>`;}
-function svcCard(s){
- let sla=s.sla==null?"—":s.sla.toFixed(2)+"%";
- return `<div class="svc"><div class="svchead">
-   <span class="dot ${s.up?'up':'down'}"></span><span class="name">${s.name}</span>
-   <span class="stats">uptime <b>${age(s.uptime_seconds)}</b> · SLA <span class="sla">${sla}</span>
-     <span class="muted">(${s.sla_window_days}d)</span></span></div>
-   ${timeline(s.timeline)}
-   <div class="meta" style="margin-top:6px;font-size:12px">${s.detail||""} · last check ${fmtTime(s.last_ts)}</div></div>`;}
-async function refresh(){
- try{const d=await (await fetch("/api/state")).json();
-  document.getElementById("sub").textContent="updated "+new Date(d.time*1000).toLocaleTimeString();
-  const A=document.getElementById("agents");
-  A.innerHTML=d.agents.length?d.agents.map(agentCard).join(""):"<div class='card muted'>no tmux sessions found</div>";
-  const S=document.getElementById("services");
-  S.innerHTML=d.services.map(s=>`<h2>${s.name}</h2>`+svcCard(s)).join("");
- }catch(e){document.getElementById("sub").textContent="connection lost…";}
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>.bar{transition:opacity .15s ease}.bar:hover{opacity:.65}</style>
+</head><body class="bg-slate-50 text-slate-800 antialiased">
+<div class="max-w-3xl mx-auto px-5 py-6">
+
+  <section class="mb-6" data-svc="agents">
+    <div class="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 bg-white border-slate-200">
+      <span class="svc-dot h-3 w-3 rounded-full bg-slate-300 shrink-0"></span>
+      <h2 class="text-base font-semibold">Persistent agents</h2>
+      <span class="agents-count ml-auto text-sm font-medium text-slate-400">loading…</span>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-white overflow-x-auto">
+      <table class="w-full text-sm"><thead>
+        <tr class="text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+          <th class="text-left font-medium px-3 py-2">Agent</th>
+          <th class="text-left font-medium px-3 py-2">Type</th>
+          <th class="text-left font-medium px-3 py-2">Session ID</th>
+          <th class="text-left font-medium px-3 py-2">Started</th>
+          <th class="text-left font-medium px-3 py-2">Status</th>
+        </tr></thead>
+        <tbody id="agents-rows"><tr><td colspan="5" class="px-3 py-3 text-slate-400">loading…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="text-[11px] text-slate-400 mt-2">tmux sessions running an agent, linked by their <code>--resume</code> session id</p>
+  </section>
+
+  <div id="services"></div>
+  <p class="text-center text-[11px] text-slate-300" id="footer">auto-refresh</p>
+</div>
+
+<template id="svc-tpl">
+  <section class="mb-6">
+    <div class="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 bg-white border-slate-200">
+      <span class="svc-dot h-3 w-3 rounded-full bg-slate-300 shrink-0"></span>
+      <h2 class="svc-name text-base font-semibold"></h2>
+      <span class="svc-state ml-auto text-sm font-medium text-slate-400">loading…</span>
+    </div>
+    <div class="grid grid-cols-3 gap-3 mb-3">
+      <div class="rounded-lg border border-slate-200 bg-white p-3">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Uptime</p>
+        <p class="m-uptime text-lg font-semibold mt-0.5">–</p>
+        <p class="text-[11px] text-slate-400">current streak</p>
+      </div>
+      <div class="rounded-lg border border-slate-200 bg-white p-3">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Availability</p>
+        <p class="m-sla text-lg font-semibold mt-0.5">–</p>
+        <p class="m-sla-sub text-[11px] text-slate-400">SLA</p>
+      </div>
+      <div class="rounded-lg border border-slate-200 bg-white p-3">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Latency</p>
+        <p class="m-x text-lg font-semibold mt-0.5">–</p>
+        <p class="m-x-sub text-[11px] text-slate-400">health check</p>
+      </div>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-xs font-semibold text-slate-500">Availability history</h3>
+        <span class="svc-tl-window text-[11px] text-slate-400"></span>
+      </div>
+      <div class="svc-timeline flex items-end gap-[2px] h-8"></div>
+      <div class="flex items-center justify-between mt-2 text-[11px] text-slate-400">
+        <span class="svc-tl-start"></span>
+        <div class="flex items-center gap-3">
+          <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-emerald-500"></span>Operational</span>
+          <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-rose-500"></span>Outage</span>
+          <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-slate-200"></span>No data</span>
+        </div>
+        <span>now</span>
+      </div>
+    </div>
+  </section>
+</template>
+
+<script>
+const STATE = {
+  operational: ["bg-emerald-500", "Operational", "text-emerald-600", "bg-emerald-50 border-emerald-200"],
+  outage:      ["bg-rose-500", "Outage", "text-rose-600", "bg-rose-50 border-rose-200"],
+  nodata:      ["bg-slate-300", "No data / not running", "text-slate-400", "bg-white border-slate-200"],
+};
+const VENDOR = { "claude-code":"bg-orange-100 text-orange-700", "codex":"bg-emerald-100 text-emerald-700",
+  "gemini":"bg-violet-100 text-violet-700", "aider":"bg-sky-100 text-sky-700" };
+function fmtDuration(s){if(s==null)return "–";const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
+  return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`;}
+function fmtTime(u){return u?new Date(u*1000).toLocaleString():"";}
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+const q=(r,s)=>r.querySelector(s);
+
+function renderTimeline(root, buckets, windowDays){
+  const tl=q(root,".svc-timeline"); tl.innerHTML=""; const GREEN=99;
+  buckets.forEach(b=>{
+    const el=document.createElement("div"); let cls,status;
+    if(b.uptime_pct==null){cls="bg-slate-200";status="no data";}
+    else if(b.uptime_pct>=GREEN){cls="bg-emerald-500";status=`${b.uptime_pct}% uptime`;}
+    else{cls="bg-rose-500";status=`outage (${b.uptime_pct}% uptime)`;}
+    el.className="bar flex-1 rounded-sm h-full "+cls;
+    el.title=`${new Date(b.start*1000).toLocaleDateString()} · ${status}`;
+    tl.appendChild(el);
+  });
+  q(root,".svc-tl-window").textContent="last "+windowDays+" days";
+  if(buckets.length) q(root,".svc-tl-start").textContent=new Date(buckets[0].start*1000).toLocaleDateString();
 }
-refresh();setInterval(refresh,POLL*1000);
+function renderService(root, s){
+  const st=STATE[s.state]||STATE.nodata;
+  q(root,".svc-head").className="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 "+st[3];
+  q(root,".svc-dot").className="svc-dot h-3 w-3 rounded-full shrink-0 "+st[0];
+  const se=q(root,".svc-state"); se.textContent=st[1]; se.className="svc-state ml-auto text-sm font-medium "+st[2];
+  q(root,".m-uptime").textContent=fmtDuration(s.uptime_seconds);
+  q(root,".m-sla").textContent=s.sla!=null?s.sla.toFixed(2)+" %":"–";
+  q(root,".m-sla-sub").textContent="over "+s.sla_window_days+" days ("+(s.sla_samples||0)+" samples)";
+  q(root,".m-x").textContent=s.latency_ms!=null?s.latency_ms+" ms":"–";
+  renderTimeline(root, s.timeline, s.timeline_days);
+}
+function renderAgents(root, agents){
+  const tb=document.getElementById("agents-rows");
+  const on=agents.some(a=>a.alive); const running=agents.filter(a=>a.alive).length;
+  q(root,".svc-head").className="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 "+(on?"bg-emerald-50 border-emerald-200":"bg-white border-slate-200");
+  q(root,".svc-dot").className="svc-dot h-3 w-3 rounded-full shrink-0 "+(on?"bg-emerald-500":"bg-slate-300");
+  const cnt=q(root,".agents-count");
+  cnt.textContent=running?`${running} agent${running===1?"":"s"} running`:"no agents running";
+  cnt.className="agents-count ml-auto text-sm font-medium "+(running?"text-emerald-600":"text-slate-400");
+  if(!agents.length){tb.innerHTML=`<tr><td colspan="5" class="px-3 py-3 text-slate-400">No tmux sessions found.</td></tr>`;return;}
+  tb.innerHTML="";
+  agents.forEach(a=>{
+    const tcls=VENDOR[a.kind]||"bg-slate-100 text-slate-600";
+    const sid=a.session_id?`<span class="font-mono text-xs text-slate-600 whitespace-nowrap">${esc(a.session_id)}</span>`
+      :`<span class="text-xs text-slate-300">— none</span>`;
+    const ok=a.alive; const stDot=ok?"bg-emerald-500":"bg-slate-300"; const stTxt=ok?"Running":"Idle";
+    const stCls=ok?"text-slate-600":"text-slate-400";
+    const tr=document.createElement("tr"); tr.className="border-b border-slate-100 last:border-0";
+    tr.innerHTML=
+      `<td class="px-3 py-1.5 font-medium text-slate-700 whitespace-nowrap">${esc(a.name)}</td>`+
+      `<td class="px-3 py-1.5 whitespace-nowrap"><span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${tcls}">${esc(a.alive?a.label:"idle")}</span></td>`+
+      `<td class="px-3 py-1.5">${sid}</td>`+
+      `<td class="px-3 py-1.5 text-slate-500 text-xs whitespace-nowrap">${a.age!=null?"ago "+fmtDuration(a.age):"–"}</td>`+
+      `<td class="px-3 py-1.5"><span class="inline-flex items-center gap-1.5 whitespace-nowrap ${stCls}"><span class="h-2 w-2 rounded-full ${stDot} shrink-0"></span>${stTxt}</span></td>`;
+    tb.appendChild(tr);
+  });
+}
+async function refresh(){
+  try{
+    const d=await (await fetch("/api/state",{credentials:"same-origin"})).json();
+    renderAgents(document.querySelector('section[data-svc="agents"]'), d.agents);
+    const box=document.getElementById("services"); const tpl=document.getElementById("svc-tpl");
+    if(box.childElementCount!==d.services.length){
+      box.innerHTML=""; d.services.forEach(()=>box.appendChild(tpl.content.cloneNode(true)));
+    }
+    const sections=box.querySelectorAll("section");
+    d.services.forEach((s,i)=>{ const root=sections[i]; q(root,".svc-name").textContent=s.name; renderService(root,s); });
+    document.getElementById("footer").textContent="updated "+new Date().toLocaleTimeString()+" · auto-refresh";
+  }catch(e){document.getElementById("footer").textContent="connection lost…";}
+}
+refresh(); setInterval(refresh, POLL*1000);
 </script></body></html>"""
 
 
 def _service_state(cfg: dict) -> list[dict]:
-    win = int(cfg.get("probe", {}).get("sla_window_days", 90)) * 86400
+    win_days = int(cfg.get("probe", {}).get("sla_window_days", 90))
     tdays = int(cfg.get("probe", {}).get("timeline_days", 90))
     out = []
     for s in cfg.get("services", []):
@@ -105,16 +204,18 @@ def _service_state(cfg: dict) -> list[dict]:
         if not name:
             continue
         cur = db.last(name)
-        sla_pct, _ = db.sla(name, win)
+        sla_pct, samples = db.sla(name, win_days * 86400)
+        lat = cur["latency"] if (cur and cur["latency"] is not None) else None
         out.append({
             "name": name,
             "up": bool(cur and cur["up"]),
+            "state": "operational" if (cur and cur["up"]) else ("outage" if cur else "nodata"),
             "detail": cur["detail"] if cur else "no data yet",
             "last_ts": cur["ts"] if cur else None,
+            "latency_ms": round(lat * 1000) if lat is not None else None,
             "uptime_seconds": db.uptime_seconds(name),
-            "sla": sla_pct,
-            "sla_window_days": cfg.get("probe", {}).get("sla_window_days", 90),
-            "timeline": db.timeline(name, tdays * 86400, tdays),
+            "sla": sla_pct, "sla_window_days": win_days, "sla_samples": samples,
+            "timeline": db.timeline(name, tdays * 86400, tdays), "timeline_days": tdays,
         })
     return out
 

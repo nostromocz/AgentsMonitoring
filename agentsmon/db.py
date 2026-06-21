@@ -78,20 +78,22 @@ def history_seconds(service: str) -> int:
     return int(r["b"] - r["a"]) if r and r["a"] is not None else 0
 
 
-def timeline(service: str, window_seconds: int, buckets: int) -> list[str | None]:
-    """Bucket the window into *buckets* slices: 'down' if any down sample landed in it,
-    'up' if only up samples, None if no data."""
+def timeline(service: str, window_seconds: int, buckets: int) -> list[dict]:
+    """Bucket the window into *buckets* slices. Each → {start: epoch, uptime_pct: float|None}
+    (percent of up samples in that bucket; None when no data). The UI greens a bucket at ≥99 %."""
     now = int(time.time())
     start = now - window_seconds
     size = max(1, window_seconds // buckets)
-    out: list[str | None] = [None] * buckets
+    agg = [[0, 0] for _ in range(buckets)]   # [up_samples, total_samples]
     with _conn() as c:
         rows = c.execute("SELECT ts, up FROM probes WHERE service=? AND ts>=? ORDER BY ts",
                          (service, start)).fetchall()
     for r in rows:
         idx = min(buckets - 1, (int(r["ts"]) - start) // size)
-        if r["up"] == 0:
-            out[idx] = "down"
-        elif out[idx] is None:
-            out[idx] = "up"
+        agg[idx][1] += 1
+        agg[idx][0] += int(r["up"])
+    out = []
+    for i, (up, total) in enumerate(agg):
+        out.append({"start": start + i * size,
+                    "uptime_pct": (round(100.0 * up / total, 2) if total else None)})
     return out
