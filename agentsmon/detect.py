@@ -220,6 +220,33 @@ def _codex_session_for_cwd(cwd: str) -> str | None:
     return _codex_info_for_cwd(cwd)[0]
 
 
+def _claude_session_for_cwd(cwd: str) -> str | None:
+    """Find the Claude Code session whose recorded cwd matches → session UUID. A freshly launched
+    `claude` (no ``--resume`` on its command line) has no id to read from argv, so we resolve it
+    from ~/.claude/projects/ — the newest transcript whose ``cwd`` matches this session's dir."""
+    base = Path.home() / ".claude" / "projects"
+    if not cwd or not base.is_dir():
+        return None
+    target = os.path.realpath(cwd)
+    files = glob.glob(str(base / "**" / "*.jsonl"), recursive=True)
+    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+    for f in files[:300]:
+        try:
+            with open(f, encoding="utf-8") as fh:
+                head = [fh.readline() for _ in range(5)]
+        except OSError:
+            continue
+        for line in head:
+            try:
+                c = json.loads(line).get("cwd")
+            except ValueError:
+                continue
+            if c and os.path.realpath(c) == target:
+                m = UUID_RE.search(os.path.basename(f))
+                return m.group(0) if m else Path(f).stem
+    return None
+
+
 def _classify(cmds: list[str], extra_matches: list[tuple]) -> tuple[str, str, str | None]:
     """Given the command lines in a session's process tree, return (kind, label, session_id).
     Built-in agents are matched FIRST so we get the real kind (and its maker colour); the
@@ -336,6 +363,12 @@ def discover_agents(extra_matches: list[tuple] | None = None, now: float | None 
             model = rmodel or codex_model
             if model:
                 label = model
+        # Claude Code: a fresh `claude` has no id on its command line — resolve it by cwd so the
+        # session id (and a working --resume) still show up.
+        if kind == "claude-code" and sid is None:
+            cwd = _session_cwd(s["name"])
+            if cwd:
+                sid = _claude_session_for_cwd(cwd)
         age = int(now - s["created"]) if s["created"] else None
         resume = RESUME_TEMPLATES.get(kind, "").format(id=sid) if (sid and kind in RESUME_TEMPLATES) else None
         agents.append({
