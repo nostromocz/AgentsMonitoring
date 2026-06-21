@@ -118,6 +118,15 @@ hash (`dashboard.auth.pwhash`), never in plaintext. Remove the `auth` block to t
   SQLite, and renders a card with current status, **current uptime**, **SLA %** over
   `probe.sla_window_days`, and a timeline. (e.g. cards "Multi-agent system availability" and
   "Telegram Bridge Status".)
+- **pinned_daemons[]** — non-tmux processes to show at the **top** of the Persistent Agents
+  table (e.g. a gateway, a worker): each has `name`, `process` (pgrep), `tag` (model/label shown),
+  `vendor` (tag colour: anthropic/openai/google) and optional `name_color` (highlight the name:
+  red/gold/green/blue).
+- **agents[].tag / agents[].vendor** — override the model label and tag colour shown for a
+  detected agent (otherwise the detected type + maker colour are used).
+- **probe.min_outage_samples** — how many consecutive failed probes count as a real outage for
+  the **Uptime** metric (default 3); isolated transient blips don't reset uptime (SLA still
+  counts them).
 - **agents[].match** — a substring of the agent's process command line that means "alive".
 - **agents[].restart** — shell command run in the session to relaunch the agent (empty = just
   recreate the tmux session). Without it, a dead agent can be detected but not revived.

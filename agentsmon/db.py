@@ -54,21 +54,28 @@ def sla(service: str, window_seconds: int) -> tuple[float | None, int]:
     return (100.0 * up / total if total else None), total
 
 
-def uptime_seconds(service: str) -> int | None:
-    """Seconds in the current up-streak (since the last down sample, or since first ever sample)."""
+def uptime_seconds(service: str, min_outage: int = 3) -> int | None:
+    """Seconds in the current up-streak. A *real outage* is ``min_outage`` or more consecutive
+    down samples; isolated transient blips (e.g. one slow health check while the process stays up)
+    do NOT reset uptime — so this reads as "time since the last real restart/outage", matching how
+    a status page reports uptime. Returns 0 if currently down, None if there's no data."""
     now = int(time.time())
     with _conn() as c:
-        cur = last(service)
-        if not cur or not cur["up"]:
-            return 0 if cur else None
-        down = c.execute("SELECT MAX(ts) t FROM probes WHERE service=? AND up=0",
-                         (service,)).fetchone()
-        first = c.execute("SELECT MIN(ts) t FROM probes WHERE service=?", (service,)).fetchone()
-    if down and down["t"]:
-        return now - int(down["t"])
-    if first and first["t"]:
-        return now - int(first["t"])
-    return None
+        rows = c.execute("SELECT ts, up FROM probes WHERE service=? ORDER BY ts", (service,)).fetchall()
+    if not rows:
+        return None
+    if not rows[-1]["up"]:
+        return 0
+    streak_start = int(rows[0]["ts"])
+    run = 0
+    for r in rows:
+        if not r["up"]:
+            run += 1
+        else:
+            if run >= min_outage:           # a real outage just ended → uptime restarts here
+                streak_start = int(r["ts"])
+            run = 0
+    return now - streak_start
 
 
 def history_seconds(service: str) -> int:

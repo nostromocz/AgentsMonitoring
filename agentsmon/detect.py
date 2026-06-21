@@ -22,12 +22,60 @@ UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 KNOWN_AGENTS = [
     ("claude-code", "Claude Code", re.compile(r"(?:^|/)claude(?:\s|$)")),
     ("codex", "Codex", re.compile(r"(?:^|/)codex(?:\s|$|\sexec\b)")),
+    ("antigravity", "Antigravity", re.compile(r"(?:^|/)agy(?:\s|$)")),
     ("aider", "Aider", re.compile(r"(?:^|/)aider(?:\s|$)")),
     ("gemini", "Gemini CLI", re.compile(r"(?:^|/)gemini(?:\s|$)")),
 ]
 
+#: Maps a detected kind to the maker, which colours its tag in the UI (anthropic=orange,
+#: openai=emerald, google=violet, other=slate).
+KIND_VENDOR = {"claude-code": "anthropic", "codex": "openai", "gemini": "google",
+               "antigravity": "google", "aider": "other"}
+
 #: Login shells — a tmux session running only these has no agent (it's idle).
 SHELLS = {"bash", "-bash", "zsh", "-zsh", "sh", "-sh", "fish", "-fish", "tmux"}
+
+
+def _etime_to_secs(s: str) -> int | None:
+    """Parse `ps -o etime` ([[dd-]hh:]mm:ss) into seconds."""
+    s = s.strip()
+    if not s:
+        return None
+    days = 0
+    if "-" in s:
+        d, s = s.split("-", 1)
+        days = int(d)
+    parts = [int(x) for x in s.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    return days * 86400 + parts[-3] * 3600 + parts[-2] * 60 + parts[-1]
+
+
+def _proc_age(pid: int) -> int | None:
+    r = _run(["ps", "-p", str(pid), "-o", "etime="])
+    if not r or r.returncode != 0:
+        return None
+    try:
+        return _etime_to_secs(r.stdout.strip())
+    except (ValueError, IndexError):
+        return None
+
+
+def pinned_agents(pinned: list[dict]) -> list[dict]:
+    """Non-tmux processes (OpenClaw, Hermes, …) shown at the top of the agents table."""
+    out = []
+    for d in pinned:
+        pat = d.get("process", "")
+        r = _run(["pgrep", "-f", pat]) if pat else None
+        pids = [int(x) for x in r.stdout.split()] if (r and r.returncode == 0) else []
+        ages = [a for a in (_proc_age(p) for p in pids) if a is not None]
+        age = max(ages) if ages else None    # oldest matching process = how long the service has been up
+        out.append({
+            "name": d.get("name"), "kind": "daemon", "label": d.get("tag", d.get("name")),
+            "vendor": d.get("vendor"), "name_color": d.get("name_color"),
+            "session_id": None, "alive": bool(pids), "age": age,
+        })
+    return out
 
 
 def _tmux_bin() -> str:
@@ -123,7 +171,8 @@ def discover_agents(extra_matches: list[tuple] | None = None, now: float | None 
         age = int(now - s["created"]) if s["created"] else None
         agents.append({
             "name": s["name"], "kind": kind, "label": label, "session_id": sid,
-            "alive": kind != "shell", "age": age, "pids": sorted(tree),
+            "vendor": KIND_VENDOR.get(kind), "alive": kind != "shell", "age": age,
+            "pids": sorted(tree),
         })
     return agents
 

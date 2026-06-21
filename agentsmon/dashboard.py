@@ -48,14 +48,14 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head>
   <section class="mb-6" data-svc="agents">
     <div class="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 bg-white border-slate-200">
       <span class="svc-dot h-3 w-3 rounded-full bg-slate-300 shrink-0"></span>
-      <h2 class="text-base font-semibold">Persistent agents</h2>
+      <h2 class="text-base font-semibold">Persistent Agents</h2>
       <span class="agents-count ml-auto text-sm font-medium text-slate-400">loading…</span>
     </div>
     <div class="rounded-lg border border-slate-200 bg-white overflow-x-auto">
       <table class="w-full text-sm"><thead>
         <tr class="text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
           <th class="text-left font-medium px-3 py-2">Agent</th>
-          <th class="text-left font-medium px-3 py-2">Type</th>
+          <th class="text-left font-medium px-3 py-2">Model</th>
           <th class="text-left font-medium px-3 py-2">Session ID</th>
           <th class="text-left font-medium px-3 py-2">Started</th>
           <th class="text-left font-medium px-3 py-2">Status</th>
@@ -119,8 +119,12 @@ const STATE = {
   outage:      ["bg-rose-500", "Outage", "text-rose-600", "bg-rose-50 border-rose-200"],
   nodata:      ["bg-slate-300", "No data / not running", "text-slate-400", "bg-white border-slate-200"],
 };
-const VENDOR = { "claude-code":"bg-orange-100 text-orange-700", "codex":"bg-emerald-100 text-emerald-700",
-  "gemini":"bg-violet-100 text-violet-700", "aider":"bg-sky-100 text-sky-700" };
+const VENDOR = { "anthropic":"bg-orange-100 text-orange-700", "openai":"bg-emerald-100 text-emerald-700",
+  "google":"bg-violet-100 text-violet-700", "gold":"bg-amber-100 text-amber-700",
+  "red":"bg-rose-100 text-rose-700", "other":"bg-slate-100 text-slate-600" };
+// Optional highlight of the agent NAME (left column), e.g. OpenClaw red, Hermes gold.
+const NAME_COLOR = { "red":"text-rose-600 font-semibold", "gold":"text-amber-600 font-semibold",
+  "green":"text-emerald-600 font-semibold", "blue":"text-sky-600 font-semibold" };
 function fmtDuration(s){if(s==null)return "–";const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
   return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`;}
 function fmtTime(u){return u?new Date(u*1000).toLocaleString():"";}
@@ -163,15 +167,16 @@ function renderAgents(root, agents){
   if(!agents.length){tb.innerHTML=`<tr><td colspan="5" class="px-3 py-3 text-slate-400">No tmux sessions found.</td></tr>`;return;}
   tb.innerHTML="";
   agents.forEach(a=>{
-    const tcls=VENDOR[a.kind]||"bg-slate-100 text-slate-600";
+    const tcls=VENDOR[a.vendor]||"bg-slate-100 text-slate-600";
     const sid=a.session_id?`<span class="font-mono text-xs text-slate-600 whitespace-nowrap">${esc(a.session_id)}</span>`
       :`<span class="text-xs text-slate-300">— none</span>`;
     const ok=a.alive; const stDot=ok?"bg-emerald-500":"bg-slate-300"; const stTxt=ok?"Running":"Idle";
     const stCls=ok?"text-slate-600":"text-slate-400";
     const tr=document.createElement("tr"); tr.className="border-b border-slate-100 last:border-0";
+    const nameCls=NAME_COLOR[a.name_color]||"text-slate-700";
     tr.innerHTML=
-      `<td class="px-3 py-1.5 font-medium text-slate-700 whitespace-nowrap">${esc(a.name)}</td>`+
-      `<td class="px-3 py-1.5 whitespace-nowrap"><span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${tcls}">${esc(a.alive?a.label:"idle")}</span></td>`+
+      `<td class="px-3 py-1.5 font-medium whitespace-nowrap ${nameCls}">${esc(a.name)}</td>`+
+      `<td class="px-3 py-1.5 whitespace-nowrap"><span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${tcls}">${esc(a.label)}</span></td>`+
       `<td class="px-3 py-1.5">${sid}</td>`+
       `<td class="px-3 py-1.5 text-slate-500 text-xs whitespace-nowrap">${a.age!=null?"ago "+fmtDuration(a.age):"–"}</td>`+
       `<td class="px-3 py-1.5"><span class="inline-flex items-center gap-1.5 whitespace-nowrap ${stCls}"><span class="h-2 w-2 rounded-full ${stDot} shrink-0"></span>${stTxt}</span></td>`;
@@ -198,6 +203,7 @@ refresh(); setInterval(refresh, POLL*1000);
 def _service_state(cfg: dict) -> list[dict]:
     win_days = int(cfg.get("probe", {}).get("sla_window_days", 90))
     tdays = int(cfg.get("probe", {}).get("timeline_days", 90))
+    min_outage = int(cfg.get("probe", {}).get("min_outage_samples", 3))
     out = []
     for s in cfg.get("services", []):
         name = s.get("name")
@@ -213,18 +219,32 @@ def _service_state(cfg: dict) -> list[dict]:
             "detail": cur["detail"] if cur else "no data yet",
             "last_ts": cur["ts"] if cur else None,
             "latency_ms": round(lat * 1000) if lat is not None else None,
-            "uptime_seconds": db.uptime_seconds(name),
+            "uptime_seconds": db.uptime_seconds(name, min_outage),
             "sla": sla_pct, "sla_window_days": win_days, "sla_samples": samples,
             "timeline": db.timeline(name, tdays * 86400, tdays), "timeline_days": tdays,
         })
     return out
 
 
+def _agents_state(cfg: dict) -> list[dict]:
+    """Pinned daemons (OpenClaw/Hermes…) first, then running tmux agents, with config display
+    overrides (tag → label, vendor → tag colour) applied."""
+    overrides = {a["name"]: a for a in cfg.get("agents", []) if a.get("name")}
+    tmux = [a for a in detect.discover_agents(config.agent_matches(cfg)) if a["alive"]]
+    for a in tmux:
+        ov = overrides.get(a["name"], {})
+        if ov.get("tag"):
+            a["label"] = ov["tag"]
+        if ov.get("vendor"):
+            a["vendor"] = ov["vendor"]
+    return detect.pinned_agents(cfg.get("pinned_daemons", [])) + tmux
+
+
 def _state() -> bytes:
     cfg = config.load()
     data = {
         "time": int(time.time()),
-        "agents": detect.discover_agents(config.agent_matches(cfg)),
+        "agents": _agents_state(cfg),
         "services": _service_state(cfg),
     }
     return json.dumps(data).encode()
