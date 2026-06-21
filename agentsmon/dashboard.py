@@ -195,8 +195,10 @@ function renderAgents(root, agents){
     const tr=document.createElement("tr"); tr.className="border-b border-slate-100 last:border-0";
     const nameBg=NAME_BG[a.name_color];
     const nameCell=nameBg?`<span class="inline-block rounded px-1.5 py-0.5 ${nameBg}">${esc(a.name)}</span>`:esc(a.name);
+    // Telegram deep-link icon for agents bridged to a bot (opens t.me/<bot> in a new tab).
+    const tg=a.telegram_url?` <a href="${esc(a.telegram_url)}" target="_blank" rel="noopener" title="Open @${esc(a.telegram_bot)} in Telegram" class="inline-flex align-middle ml-1 hover:opacity-70"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="#229ED9"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.27 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg></a>`:"";
     tr.innerHTML=
-      `<td class="px-3 py-1.5 font-medium text-slate-700 whitespace-nowrap">${nameCell}</td>`+
+      `<td class="px-3 py-1.5 font-medium text-slate-700 whitespace-nowrap">${nameCell}${tg}</td>`+
       `<td class="px-3 py-1.5 whitespace-nowrap"><span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${tcls}">${esc(a.label)}</span></td>`+
       `<td class="px-3 py-1.5">${sid}</td>`+
       `<td class="px-3 py-1.5 text-slate-500 text-xs whitespace-nowrap">${a.age!=null?"ago "+fmtDuration(a.age):"–"}</td>`+
@@ -281,7 +283,16 @@ def _agents_state(cfg: dict) -> list[dict]:
             a["vendor"] = ov["vendor"]
         if ov.get("restart"):
             a["resume_cmd"] = ov["restart"]
-    return detect.pinned_agents(cfg.get("pinned_daemons", [])) + tmux
+    agents = detect.pinned_agents(cfg.get("pinned_daemons", [])) + tmux
+    # Soft integration: if an agent's tmux session is bridged to Telegram (via Agent2Telegram),
+    # attach a t.me/<bot> deep link so the dashboard can show a Telegram icon. Token never read.
+    links = detect.telegram_links()
+    for a in agents:
+        bot = links.get(a.get("name"))
+        if bot:
+            a["telegram_bot"] = bot
+            a["telegram_url"] = f"https://t.me/{bot}"
+    return agents
 
 
 def _state() -> bytes:

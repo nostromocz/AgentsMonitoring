@@ -142,6 +142,11 @@ hash (`dashboard.auth.pwhash`), never in plaintext. Remove the `auth` block to t
   `agents` (running tmux‑agent count).
 - **agents[].tag / agents[].vendor** — override the model label and tag colour shown for a
   detected agent (otherwise the detected type + maker colour are used).
+- **Telegram link (optional)** — if an agent's tmux session is bridged to a bot with
+  [Agent2Telegram](https://github.com/petrludwig-collab/Agent2Telegram), the dashboard shows a
+  small Telegram icon next to it that opens `t.me/<bot>`. It's a soft integration: the dashboard
+  reads only the non-secret bot `@username` from the bridge's config (never the token), and if the
+  bridge isn't present the icon simply doesn't appear. No setup, not required.
 - **probe.min_outage_samples** — how many consecutive failed probes count as a real outage for
   the **Uptime** metric (default 3); isolated transient blips don't reset uptime (SLA still
   counts them).

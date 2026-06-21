@@ -379,6 +379,29 @@ def discover_agents(extra_matches: list[tuple] | None = None, now: float | None 
     return agents
 
 
+def telegram_links() -> dict[str, str]:
+    """Map tmux-session name → bot @username for any agent connected to Telegram via Agent2Telegram.
+
+    This is an OPTIONAL, soft integration — not a dependency. The agent↔bot mapping only exists in
+    the bridge's own config, so we read it from there (``~/.config/agent2telegram/*.json``), taking
+    ONLY the non-secret ``bot_username`` (never the token). If Agent2Telegram isn't installed, or a
+    bridge predates the username field, the map is just empty and no link is shown — nothing breaks.
+    """
+    out: dict[str, str] = {}
+    base = Path.home() / ".config" / "agent2telegram"
+    if not base.is_dir():
+        return out
+    for p in base.glob("*.json"):
+        try:
+            d = json.loads(p.read_text("utf-8"))
+        except (OSError, ValueError):
+            continue
+        sess, user = d.get("tmux_session"), d.get("bot_username")
+        if sess and user:
+            out[sess] = user
+    return out
+
+
 def _http_ok(url: str, timeout: float = 4) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
