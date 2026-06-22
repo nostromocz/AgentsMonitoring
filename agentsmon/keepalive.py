@@ -9,6 +9,7 @@ from cron/systemd/launchd).
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -16,6 +17,24 @@ import time
 from pathlib import Path
 
 from . import config, detect
+
+
+def _attempts_path() -> Path:
+    return config.state_dir() / "keepalive_attempts.json"
+
+
+def _load_attempts() -> dict:
+    try:
+        return json.loads(_attempts_path().read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_attempts(attempts: dict) -> None:
+    try:
+        _attempts_path().write_text(json.dumps(attempts), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _log(msg: str) -> None:
@@ -61,10 +80,15 @@ def _alive(name: str, match_kw: str, sessions: dict, children: dict, procs: dict
     return True, any(match_kw in procs.get(p, "") for p in tree)
 
 
-def _start(agent: dict, tmux_bin: str) -> None:
+def _start(agent: dict, tmux_bin: str, recreate: bool = False) -> None:
     name = agent["name"]
     cwd = os.path.expanduser(agent.get("cwd") or str(Path.home()))
     cmd = agent.get("restart", "")
+    if recreate:
+        # The session survives but the agent won't relaunch into it (the pane is stuck in a
+        # half-dead state). Kill it so it's recreated clean instead of send-keys'ing into the mess.
+        subprocess.run([tmux_bin, "kill-session", "-t", name], capture_output=True, timeout=10)
+        time.sleep(0.5)
     if name not in {s["name"] for s in detect.tmux_sessions()}:
         subprocess.run([tmux_bin, "new-session", "-d", "-s", name, "-c", cwd],
                        capture_output=True, timeout=10)
@@ -81,15 +105,26 @@ def tick(cfg: dict) -> int:
     sessions = {s["name"]: s for s in detect.tmux_sessions()}
     procs, children = detect._proc_table()
     restarts = 0
+    attempts = _load_attempts()
     for a in cfg.get("agents", []):
         if not a.get("enabled", True):
             continue
-        exists, alive = _alive(a["name"], a.get("match", ""), sessions, children, procs)
+        name = a["name"]
+        exists, alive = _alive(name, a.get("match", ""), sessions, children, procs)
         if alive:
+            attempts.pop(name, None)          # recovered → clear the failure counter
             continue
-        _log(f"agent '{a['name']}' {'dead in session' if exists else 'session missing'} → restarting")
-        _start(a, tmux_bin)
+        n = attempts.get(name, 0) + 1
+        attempts[name] = n
+        # First failure → plain restart (send-keys into the session). If it's STILL dead next pass,
+        # the pane is stuck (a half-dead agent + a bare shell), so kill + recreate the session for a
+        # clean launch instead of send-keys'ing into the mess forever.
+        recreate = exists and n >= 2
+        _log(f"agent '{name}' {'dead in session' if exists else 'session missing'} → "
+             f"{'recreating session' if recreate else 'restarting'} (attempt {n})")
+        _start(a, tmux_bin, recreate=recreate)
         restarts += 1
+    _save_attempts(attempts)
     for d in detect.daemon_status(cfg.get("daemons", [])):
         spec = next((x for x in cfg.get("daemons", []) if x.get("name") == d["name"]), {})
         if not d["up"] and spec.get("restart"):
