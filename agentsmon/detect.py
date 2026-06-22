@@ -84,8 +84,16 @@ def _daemon_port(health_url: str | None) -> int | None:
 
 
 def pinned_agents(pinned: list[dict]) -> list[dict]:
-    """Non-tmux processes (OpenClaw, Hermes, …) shown at the top of the agents table. If a daemon
-    has a ``health_url`` we measure its warm round-trip latency, shown in place of the status."""
+    """Non-tmux processes (OpenClaw, Hermes, …) shown at the top of the agents table.
+
+    Liveness: a daemon that advertises a ``health_url`` is "up" iff that endpoint answers — NOT
+    whether a process-name regex matched. Process command lines vary by install method (venv,
+    pip ``--user``, pipx, distro package): e.g. one host runs ``venv/bin/hermes gateway`` while
+    another runs ``python -m hermes_cli gateway``, so any single regex silently fails somewhere.
+    Worse, a loose pattern can match an unrelated process (an OpenClaw node launched from a
+    ``.hermes/node`` path matches ``hermes.*gateway``). The health endpoint sidesteps all of that.
+    The ``process`` pattern is only the liveness signal for daemons WITHOUT a ``health_url``;
+    when a ``health_url`` is set the pattern is best-effort, used solely to report uptime."""
     from . import probe
     out = []
     for d in pinned:
@@ -94,10 +102,14 @@ def pinned_agents(pinned: list[dict]) -> list[dict]:
         pids = [int(x) for x in r.stdout.split()] if (r and r.returncode == 0) else []
         ages = [a for a in (_proc_age(p) for p in pids) if a is not None]
         age = max(ages) if ages else None    # oldest matching process = how long the service has been up
+        health_url = d.get("health_url")
         lat = None
-        if d.get("health_url") and pids:
-            ok, secs = probe._http(d["health_url"], timeout=2)
+        if health_url:
+            ok, secs = probe._http(health_url, timeout=2)
+            alive = bool(ok)                              # health endpoint is authoritative
             lat = round(secs * 1000) if secs is not None else None
+        else:
+            alive = bool(pids)                            # no health URL → fall back to process match
         # Concrete model detected LIVE (so it stays current without rebuilding config); an
         # explicit config tag/vendor still wins if set.
         model = daemon_model(d.get("name", ""))
@@ -106,9 +118,9 @@ def pinned_agents(pinned: list[dict]) -> list[dict]:
             "label": d.get("tag") or model or d.get("name"),
             "vendor": d.get("vendor") or vendor_for_model(model),
             "name_color": d.get("name_color"),
-            "session_id": None, "alive": bool(pids), "age": age, "latency_ms": lat,
-            "health_url": d.get("health_url"),
-            "port": _daemon_port(d.get("health_url")) if pids else None,
+            "session_id": None, "alive": alive, "age": age, "latency_ms": lat,
+            "health_url": health_url,
+            "port": _daemon_port(health_url) if (health_url and alive) else None,
         })
     return out
 
