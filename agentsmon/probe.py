@@ -65,25 +65,25 @@ def _system_health(cfg: dict) -> tuple[bool, float | None, str]:
         if a.get("enabled", True) and a.get("name") and a["name"] not in alive:
             down.append(a["name"])
 
-    for d in cfg.get("daemons", []):
-        if d.get("pattern") and not _proc_up(d["pattern"]):
-            down.append(d.get("name") or d["pattern"])
-
-    # Pinned daemons + real (non-system) services: process must run and any health endpoint pass.
-    checks = list(cfg.get("pinned_daemons", []))
+    # Daemons (keepalive list) + pinned daemons + real (non-system) services. Anything that
+    # advertises a health endpoint is judged by that endpoint — authoritative. The process
+    # pattern is the liveness signal ONLY when there's no health_url, since command lines vary
+    # by install method (venv / pip --user / pipx) and a stale regex would fake an outage.
+    checks = list(cfg.get("daemons", []))
+    checks += list(cfg.get("pinned_daemons", []))
     checks += [s for s in cfg.get("services", []) if s.get("kind") != "system"]
     for c in checks:
         name = c.get("name") or c.get("process") or c.get("pattern") or "?"
-        pat = c.get("process") or c.get("pattern") or ""
-        if pat and not _proc_up(pat):
-            down.append(name)
-            continue
         url = c.get("health_url")
         if url:
             ok, lat = _http(url)
             if lat is not None:
                 lats.setdefault(url, lat)
             if not ok:
+                down.append(name)
+        else:
+            pat = c.get("process") or c.get("pattern") or ""
+            if pat and not _proc_up(pat):
                 down.append(name)
 
     uniq: list[str] = []
