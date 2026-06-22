@@ -71,7 +71,11 @@ COMMON_DAEMONS = [
     {"name": "OpenClaw", "pattern": "openclaw", "binary": "openclaw", "name_color": "red",
      "health_url": "http://127.0.0.1:18789/health",
      "restart": "nohup openclaw gateway > ~/openclaw.log 2>&1 &"},
-    {"name": "Hermes", "pattern": "hermes.* gateway", "binary": "hermes", "name_color": "gold",
+    # Match the real Hermes process (Python hermes_cli) specifically. A loose 'hermes.* gateway'
+    # also matched an OpenClaw node gateway launched from ~/.hermes/node, so the monitor thought
+    # Hermes was alive (and keepalive never revived the actually-dead Hermes).
+    {"name": "Hermes", "pattern": "hermes_cli.* gateway", "binary": "hermes", "name_color": "gold",
+     "health_url": "http://127.0.0.1:8642/health",
      "restart": "nohup hermes gateway run --replace > ~/hermes.log 2>&1 &"},
 ]
 
