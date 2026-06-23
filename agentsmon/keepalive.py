@@ -127,6 +127,8 @@ def tick(cfg: dict) -> int:
     _save_attempts(attempts)
     for d in detect.daemon_status(cfg.get("daemons", [])):
         spec = next((x for x in cfg.get("daemons", []) if x.get("name") == d["name"]), {})
+        if not spec.get("enabled", True):
+            continue                       # explicitly stopped from the dashboard — don't revive it
         if not d["up"] and spec.get("restart"):
             _log(f"daemon '{d['name']}' down → restart")
             subprocess.run(spec["restart"], shell=True, capture_output=True, timeout=30)

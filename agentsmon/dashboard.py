@@ -13,11 +13,14 @@ import base64
 import hashlib
 import hmac
 import json
+import os
+import shutil
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import config, db, detect, probe
+from . import config, db, detect, keepalive, probe
 
 
 def password_hash(password: str) -> str:
@@ -60,8 +63,9 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head>
           <th class="text-left font-medium px-3 py-2">Session ID / Port</th>
           <th class="text-left font-medium px-3 py-2">Started</th>
           <th class="text-left font-medium px-3 py-2">Status</th>
+          <th class="text-right font-medium px-3 py-2"></th>
         </tr></thead>
-        <tbody id="agents-rows"><tr><td colspan="5" class="px-3 py-3 text-slate-400">loading…</td></tr></tbody>
+        <tbody id="agents-rows"><tr><td colspan="6" class="px-3 py-3 text-slate-400">loading…</td></tr></tbody>
       </table>
     </div>
     <p class="text-[11px] text-slate-400 mt-2">tmux sessions running an agent, linked by their <code>--resume</code> session id</p>
@@ -181,7 +185,7 @@ function renderAgents(root, agents){
   const cnt=q(root,".agents-count");
   cnt.textContent=running?`${running} agent${running===1?"":"s"} running`:"no agents running";
   cnt.className="agents-count ml-auto text-sm font-medium "+(running?"text-emerald-600":"text-slate-400");
-  if(!agents.length){tb.innerHTML=`<tr><td colspan="5" class="px-3 py-3 text-slate-400">No tmux sessions found.</td></tr>`;return;}
+  if(!agents.length){tb.innerHTML=`<tr><td colspan="6" class="px-3 py-3 text-slate-400">No tmux sessions found.</td></tr>`;return;}
   tb.innerHTML="";
   agents.forEach(a=>{
     const tcls=VENDOR[a.vendor]||"bg-slate-100 text-slate-600";
@@ -217,7 +221,14 @@ function renderAgents(root, agents){
       `<td class="px-3 py-1.5 whitespace-nowrap"><span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${tcls}">${esc(a.label)}</span></td>`+
       `<td class="px-3 py-1.5">${sid}</td>`+
       `<td class="px-3 py-1.5 text-slate-500 text-xs whitespace-nowrap">${a.age!=null?"ago "+fmtDuration(a.age):"–"}</td>`+
-      `<td class="px-3 py-1.5"><span class="inline-flex items-center gap-1.5 whitespace-nowrap ${stCls}"><span class="h-2 w-2 rounded-full ${dot} shrink-0"></span>${statusTxt}</span></td>`;
+      `<td class="px-3 py-1.5"><span class="inline-flex items-center gap-1.5 whitespace-nowrap ${stCls}"><span class="h-2 w-2 rounded-full ${dot} shrink-0"></span>${statusTxt}</span></td>`+
+      // Per-row actions: ↻ restart, ✕ stop. Small icons at the very end of the row.
+      `<td class="px-3 py-1.5 text-right whitespace-nowrap">`+
+        `<button class="agent-act inline-flex align-middle p-1 rounded text-slate-400 hover:text-sky-600 hover:bg-slate-100" data-act="restart" data-name="${esc(a.name)}" title="Restart ${esc(a.name)}">`+
+          `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>`+
+        `<button class="agent-act inline-flex align-middle p-1 ml-0.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50" data-act="stop" data-name="${esc(a.name)}" title="Stop ${esc(a.name)}">`+
+          `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`+
+      `</td>`;
     tb.appendChild(tr);
   });
 }
@@ -256,6 +267,21 @@ document.addEventListener("click", e=>{
     setTimeout(()=>el.classList.remove("copied-flash"), 700);
     showToast("✓ Copied to clipboard");
   });
+});
+// Restart / Stop buttons → POST /api/agent/action, then refresh. Stop asks for confirmation.
+document.addEventListener("click", async e=>{
+  const btn=e.target.closest(".agent-act"); if(!btn) return;
+  const name=btn.dataset.name, act=btn.dataset.act;
+  if(act==="stop" && !confirm(`Stop agent "${name}"? It won't be auto-restarted until you press ↻.`)) return;
+  btn.disabled=true; btn.classList.add("opacity-40");
+  showToast((act==="restart"?"↻ Restarting ":"✕ Stopping ")+name+"…");
+  try{
+    const r=await fetch("/api/agent/action",{method:"POST",credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({name,action:act})});
+    const j=await r.json().catch(()=>({}));
+    showToast((j&&j.ok?"✓ ":"⚠ ")+((j&&j.message)||(r.ok?"done":"failed")));
+  }catch(err){ showToast("⚠ "+err); }
+  setTimeout(refresh, act==="restart"?2500:600);
 });
 refresh(); setInterval(refresh, POLL*1000);
 </script></body></html>"""
@@ -333,6 +359,57 @@ def _agents_state(cfg: dict) -> list[dict]:
     return agents
 
 
+def _set_enabled(name: str, enabled: bool) -> None:
+    """Persist enabled=true/false on the named agent/daemon in the RAW config file (so keepalive
+    stops reviving a stopped agent). Targeted edit — preserves the rest of the user's file."""
+    path = config.DEFAULT_PATH
+    try:
+        raw = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return
+    changed = False
+    for key in ("agents", "daemons"):
+        for entry in raw.get(key, []):
+            if entry.get("name") == name:
+                entry["enabled"] = enabled
+                changed = True
+    if changed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.chmod(path, 0o600)
+
+
+def _agent_action(name: str, action: str) -> tuple[bool, str]:
+    """Dashboard row actions. action: 'restart' | 'stop'. Returns (ok, message)."""
+    cfg = config.load()
+    tmux_bin = shutil.which(cfg.get("tmux_bin", "tmux")) or "tmux"
+    agent = next((a for a in cfg.get("agents", []) if a.get("name") == name), None)
+    daemon = next((d for d in cfg.get("daemons", []) if d.get("name") == name), None)
+    if not agent and not daemon:
+        return False, f"unknown agent '{name}'"
+    if action == "restart":
+        # Re-enable (in case it was stopped) and relaunch fresh so it picks up new config (e.g. MCP).
+        _set_enabled(name, True)
+        if agent:
+            keepalive._start(agent, tmux_bin, recreate=True)   # kill session + recreate + resume cmd
+            return True, f"restarting {name}"
+        cmd = daemon.get("restart")
+        if not cmd:
+            return False, f"{name} has no restart command"
+        subprocess.run(cmd, shell=True, capture_output=True, timeout=30)
+        return True, f"restarting {name}"
+    if action == "stop":
+        # Disable first so keepalive won't revive it, then kill the session / process.
+        _set_enabled(name, False)
+        if agent:
+            subprocess.run([tmux_bin, "kill-session", "-t", name], capture_output=True, timeout=10)
+            return True, f"stopped {name}"
+        pat = daemon.get("pattern") or daemon.get("binary") or name
+        subprocess.run(["pkill", "-f", pat], capture_output=True, timeout=10)
+        return True, f"stopped {name}"
+    return False, f"unknown action '{action}'"
+
+
 def _state() -> bytes:
     cfg = config.load()
     agents = _agents_state(cfg)
@@ -407,6 +484,42 @@ def serve(host: str, port: int) -> None:
                 self.send_response(404)
                 self.end_headers()
                 return
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            if auth_user and auth_hash and not _auth_ok(self.headers.get("Authorization"),
+                                                        auth_user, auth_hash):
+                return self._denied()
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(self.path)
+            if parsed.path != "/api/agent/action":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b""
+            params = {}
+            try:
+                params = json.loads(raw or b"{}")
+            except ValueError:
+                params = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
+            qs = parse_qs(parsed.query)
+            name = params.get("name") or (qs.get("name", [None])[0])
+            act = params.get("action") or (qs.get("action", [None])[0])
+            if not name or act not in ("restart", "stop"):
+                body = json.dumps({"ok": False, "error": "need name + action (restart|stop)"}).encode()
+                status = 400
+            else:
+                try:
+                    ok, msg = _agent_action(name, act)
+                except Exception as exc:                      # never 500 the dashboard on a bad action
+                    ok, msg = False, str(exc)
+                body = json.dumps({"ok": ok, "message": msg}).encode()
+                status = 200 if ok else 500
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
