@@ -141,6 +141,13 @@ class ThemePersistenceAndLiveUpdateTests(unittest.TestCase):
         self.assertIn('activeTheme==="auto"', listener)
         self.assertIn('applyTheme("auto")', listener)
 
+    def test_footer_time_uses_prague_timezone_and_24_hour_clock(self):
+        body = self._script_body()
+        self.assertIn('toLocaleTimeString("cs-CZ"', body)
+        self.assertIn('hour12:false', body)
+        self.assertIn('timeZone:"Europe/Prague"', body)
+        self.assertIn('second:"2-digit"', body)
+
     def test_apply_theme_normalizes_invalid_input_and_tracks_session_choice(self):
         body = self._script_body()
         self.assertIn('let activeTheme="auto"', body)
