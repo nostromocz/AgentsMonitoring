@@ -43,21 +43,41 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agents Monitoring</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+<script>
+// Applied synchronously, before the page body paints, so the page never flashes the wrong theme:
+// a valid explicit choice in localStorage wins; unavailable or invalid storage falls back to Auto.
+var t=null;
+try{t=localStorage.getItem("agentsmon-theme");}catch(e){}
+var valid=t==="light"||t==="dark";
+var d=valid?t==="dark":matchMedia("(prefers-color-scheme: dark)").matches;
+document.documentElement.classList.toggle("dark",d);
+</script>
 <script src="https://cdn.tailwindcss.com"></script>
-<style>.bar{transition:opacity .15s ease}.bar:hover{opacity:.65}.copied-flash{color:#059669!important;transition:color .1s}#toast{transition:opacity .2s ease}</style>
-</head><body class="bg-slate-50 text-slate-800 antialiased">
-<div id="toast" class="fixed left-1/2 bottom-5 -translate-x-1/2 bg-slate-800 text-white text-sm px-2 py-1.5 rounded-md shadow-lg opacity-0 pointer-events-none" style="z-index:50">&nbsp;</div>
+<script>tailwind.config={darkMode:"class"};</script>
+<style>.bar{transition:opacity .15s ease}.bar:hover{opacity:.65}.copied-flash{color:#059669!important;transition:color .1s}.dark .copied-flash{color:#34d399!important}#toast{transition:opacity .2s ease}</style>
+</head><body class="bg-slate-50 text-slate-800 antialiased dark:bg-slate-900 dark:text-slate-200">
+<div id="toast" class="fixed left-1/2 bottom-5 -translate-x-1/2 bg-slate-800 text-white text-sm px-2 py-1.5 rounded-md shadow-lg opacity-0 pointer-events-none dark:bg-slate-700" style="z-index:50">&nbsp;</div>
 <div class="mx-auto px-5 py-6" style="max-width:850px">
 
+  <div class="flex items-center justify-end mb-3">
+    <label for="theme-select" class="sr-only">Dashboard theme</label>
+    <select id="theme-select" aria-label="Dashboard theme" title="Dashboard theme: Auto follows your OS setting"
+      class="text-xs rounded-md border border-slate-200 bg-white text-slate-600 px-2 py-1 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1 dark:focus-visible:ring-sky-400">
+      <option value="auto">Auto</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </div>
+
   <section class="mb-6" data-svc="agents">
-    <div class="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 bg-white border-slate-200">
-      <span class="svc-dot h-3 w-3 rounded-full bg-slate-300 shrink-0"></span>
+    <div class="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700">
+      <span class="svc-dot h-3 w-3 rounded-full bg-slate-300 shrink-0 dark:bg-slate-600"></span>
       <h2 class="text-base font-semibold">Persistent Agents</h2>
-      <span class="agents-count ml-auto text-sm font-medium text-slate-400">loading…</span>
+      <span class="agents-count ml-auto text-sm font-medium text-slate-400 dark:text-slate-400">loading…</span>
     </div>
-    <div class="rounded-lg border border-slate-200 bg-white overflow-x-auto">
+    <div class="rounded-lg border border-slate-200 bg-white overflow-x-auto dark:bg-slate-800 dark:border-slate-700">
       <table class="w-full text-sm"><thead>
-        <tr class="text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+        <tr class="text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100 dark:text-slate-400 dark:border-slate-800">
           <th class="text-left font-medium px-2 py-2">Agent</th>
           <th class="text-left font-medium px-2 py-2">Model</th>
           <th class="text-left font-medium px-2 py-2">Session ID / Port</th>
@@ -65,52 +85,52 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head>
           <th class="text-left font-medium px-2 py-2">Status</th>
           <th class="text-right font-medium px-2 py-2"></th>
         </tr></thead>
-        <tbody id="agents-rows"><tr><td colspan="6" class="px-3 py-3 text-slate-400">loading…</td></tr></tbody>
+        <tbody id="agents-rows"><tr><td colspan="6" class="px-3 py-3 text-slate-400 dark:text-slate-400">loading…</td></tr></tbody>
       </table>
     </div>
-    <p class="text-[11px] text-slate-400 mt-2">tmux sessions running an agent, linked by their <code>--resume</code> session id</p>
+    <p class="text-[11px] text-slate-400 mt-2 dark:text-slate-400">tmux sessions running an agent, linked by their <code>--resume</code> session id</p>
   </section>
 
   <div id="services"></div>
-  <p class="text-center text-[11px] text-slate-300" id="footer">auto-refresh</p>
+  <p class="text-center text-[11px] text-slate-300 dark:text-slate-400" id="footer">auto-refresh</p>
 </div>
 
 <template id="svc-tpl">
   <section class="mb-6">
-    <div class="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 bg-white border-slate-200">
-      <span class="svc-dot h-3 w-3 rounded-full bg-slate-300 shrink-0"></span>
+    <div class="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700">
+      <span class="svc-dot h-3 w-3 rounded-full bg-slate-300 shrink-0 dark:bg-slate-600"></span>
       <h2 class="svc-name text-base font-semibold"></h2>
-      <span class="svc-state ml-auto text-sm font-medium text-slate-400">loading…</span>
+      <span class="svc-state ml-auto text-sm font-medium text-slate-400 dark:text-slate-400">loading…</span>
     </div>
     <div class="grid grid-cols-3 gap-3 mb-3">
-      <div class="rounded-lg border border-slate-200 bg-white p-3">
-        <p class="text-[11px] uppercase tracking-wide text-slate-400">Uptime</p>
+      <div class="rounded-lg border border-slate-200 bg-white p-3 dark:bg-slate-800 dark:border-slate-700">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-400">Uptime</p>
         <p class="m-uptime text-lg font-semibold mt-0.5">–</p>
-        <p class="text-[11px] text-slate-400">current streak</p>
+        <p class="text-[11px] text-slate-400 dark:text-slate-400">current streak</p>
       </div>
-      <div class="rounded-lg border border-slate-200 bg-white p-3">
-        <p class="text-[11px] uppercase tracking-wide text-slate-400">Availability</p>
+      <div class="rounded-lg border border-slate-200 bg-white p-3 dark:bg-slate-800 dark:border-slate-700">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-400">Availability</p>
         <p class="m-sla text-lg font-semibold mt-0.5">–</p>
-        <p class="m-sla-sub text-[11px] text-slate-400">SLA</p>
+        <p class="m-sla-sub text-[11px] text-slate-400 dark:text-slate-400">SLA</p>
       </div>
-      <div class="rounded-lg border border-slate-200 bg-white p-3">
-        <p class="m-x-label text-[11px] uppercase tracking-wide text-slate-400">Latency</p>
+      <div class="rounded-lg border border-slate-200 bg-white p-3 dark:bg-slate-800 dark:border-slate-700">
+        <p class="m-x-label text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-400">Latency</p>
         <p class="m-x text-lg font-semibold mt-0.5">–</p>
-        <p class="m-x-sub text-[11px] text-slate-400">health check</p>
+        <p class="m-x-sub text-[11px] text-slate-400 dark:text-slate-400">health check</p>
       </div>
     </div>
-    <div class="rounded-lg border border-slate-200 bg-white p-4">
+    <div class="rounded-lg border border-slate-200 bg-white p-4 dark:bg-slate-800 dark:border-slate-700">
       <div class="flex items-center justify-between mb-2">
-        <h3 class="text-xs font-semibold text-slate-500">Availability history</h3>
-        <span class="svc-tl-window text-[11px] text-slate-400"></span>
+        <h3 class="text-xs font-semibold text-slate-500 dark:text-slate-400">Availability history</h3>
+        <span class="svc-tl-window text-[11px] text-slate-400 dark:text-slate-400"></span>
       </div>
       <div class="svc-timeline flex items-end gap-[2px] h-8"></div>
-      <div class="flex items-center justify-between mt-2 text-[11px] text-slate-400">
+      <div class="flex items-center justify-between mt-2 text-[11px] text-slate-400 dark:text-slate-400">
         <span class="svc-tl-start"></span>
         <div class="flex items-center gap-3">
           <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-emerald-500"></span>Operational</span>
           <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-rose-500"></span>Outage</span>
-          <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-slate-200"></span>No data</span>
+          <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-slate-200 dark:bg-slate-700"></span>No data</span>
         </div>
         <span>now</span>
       </div>
@@ -120,15 +140,19 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head>
 
 <script>
 const STATE = {
-  operational: ["bg-emerald-500", "Operational", "text-emerald-600", "bg-emerald-50 border-emerald-200"],
-  outage:      ["bg-rose-500", "Outage", "text-rose-600", "bg-rose-50 border-rose-200"],
-  nodata:      ["bg-slate-300", "No data / not running", "text-slate-400", "bg-white border-slate-200"],
+  operational: ["bg-emerald-500", "Operational", "text-emerald-600 dark:text-emerald-400", "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-900"],
+  outage:      ["bg-rose-500", "Outage", "text-rose-600 dark:text-rose-400", "bg-rose-50 border-rose-200 dark:bg-rose-950/40 dark:border-rose-900"],
+  nodata:      ["bg-slate-300 dark:bg-slate-600", "No data / not running", "text-slate-400 dark:text-slate-400", "bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700"],
 };
-const VENDOR = { "anthropic":"bg-orange-100 text-orange-700", "openai":"bg-emerald-100 text-emerald-700",
-  "google":"bg-violet-100 text-violet-700", "gold":"bg-amber-100 text-amber-700",
-  "red":"bg-rose-100 text-rose-700", "other":"bg-slate-100 text-slate-600" };
+const VENDOR = { "anthropic":"bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
+  "openai":"bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+  "google":"bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
+  "gold":"bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  "red":"bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300",
+  "other":"bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300" };
 // Optional background highlight behind the agent NAME (like the model tags), text stays normal.
-const NAME_BG = { "red":"bg-rose-100", "gold":"bg-amber-100", "green":"bg-emerald-100", "blue":"bg-sky-100" };
+const NAME_BG = { "red":"bg-rose-100 dark:bg-rose-900/40", "gold":"bg-amber-100 dark:bg-amber-900/40",
+  "green":"bg-emerald-100 dark:bg-emerald-900/40", "blue":"bg-sky-100 dark:bg-sky-900/40" };
 function fmtDuration(s){if(s==null)return "–";const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
   return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`;}
 function fmtTime(u){return u?new Date(u*1000).toLocaleString():"";}
@@ -136,13 +160,40 @@ function fmtLat(ms){return ms==null?"–":(ms<1?"<1 ms":ms+" ms");}
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 const q=(r,s)=>r.querySelector(s);
 
+// Theme selector. Auto is represented by no stored value, so it continues to follow the OS.
+const themeSelect=document.getElementById("theme-select");
+const themeMedia=matchMedia("(prefers-color-scheme: dark)");
+let activeTheme="auto";
+function applyTheme(choice){
+  choice=choice==="light"||choice==="dark"||choice==="auto"?choice:"auto";
+  activeTheme=choice;
+  const dark=choice==="dark"||(choice==="auto"&&themeMedia.matches);
+  document.documentElement.classList.toggle("dark",dark);
+  themeSelect.value=choice;
+  themeSelect.title=choice==="auto"?"Dashboard theme: Auto follows your OS setting":`Dashboard theme: ${choice}`;
+}
+let storedTheme=null;
+try{storedTheme=localStorage.getItem("agentsmon-theme");}catch(e){}
+applyTheme(storedTheme==="light"||storedTheme==="dark"?storedTheme:"auto");
+themeSelect.addEventListener("change",()=>{
+  const choice=themeSelect.value;
+  try{
+    if(choice==="auto") localStorage.removeItem("agentsmon-theme");
+    else localStorage.setItem("agentsmon-theme",choice);
+  }catch(e){}
+  applyTheme(choice);
+});
+themeMedia.addEventListener("change",()=>{
+  if(activeTheme==="auto")applyTheme("auto");
+});
+
 function renderTimeline(root, buckets, windowDays){
   const tl=q(root,".svc-timeline"); tl.innerHTML=""; const GREEN=99;
   buckets.forEach(b=>{
     const el=document.createElement("div"); let cls,status;
-    if(b.uptime_pct==null){cls="bg-slate-200";status="no data";}
-    else if(b.uptime_pct>=GREEN){cls="bg-emerald-500";status=`${b.uptime_pct}% uptime`;}
-    else{cls="bg-rose-500";status=`outage (${b.uptime_pct}% uptime)`;}
+    if(b.uptime_pct==null){cls="bg-slate-200 dark:bg-slate-700";status="no data";}
+    else if(b.uptime_pct>=GREEN){cls="bg-emerald-500 dark:bg-emerald-400";status=`${b.uptime_pct}% uptime`;}
+    else{cls="bg-rose-500 dark:bg-rose-400";status=`outage (${b.uptime_pct}% uptime)`;}
     el.className="bar flex-1 rounded-sm h-full "+cls;
     el.title=`${new Date(b.start*1000).toLocaleDateString()} · ${status}`;
     tl.appendChild(el);
@@ -180,31 +231,31 @@ function renderService(root, s){
 function renderAgents(root, agents){
   const tb=document.getElementById("agents-rows");
   const on=agents.some(a=>a.alive); const running=agents.filter(a=>a.alive).length;
-  q(root,".svc-head").className="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 "+(on?"bg-emerald-50 border-emerald-200":"bg-white border-slate-200");
-  q(root,".svc-dot").className="svc-dot h-3 w-3 rounded-full shrink-0 "+(on?"bg-emerald-500":"bg-slate-300");
+  q(root,".svc-head").className="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 "+(on?"bg-emerald-50 border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-900":"bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700");
+  q(root,".svc-dot").className="svc-dot h-3 w-3 rounded-full shrink-0 "+(on?"bg-emerald-500":"bg-slate-300 dark:bg-slate-600");
   const cnt=q(root,".agents-count");
   cnt.textContent=running?`${running} agent${running===1?"":"s"} running`:"no agents running";
-  cnt.className="agents-count ml-auto text-sm font-medium "+(running?"text-emerald-600":"text-slate-400");
-  if(!agents.length){tb.innerHTML=`<tr><td colspan="6" class="px-3 py-3 text-slate-400">No tmux sessions found.</td></tr>`;return;}
+  cnt.className="agents-count ml-auto text-sm font-medium "+(running?"text-emerald-600 dark:text-emerald-400":"text-slate-400 dark:text-slate-400");
+  if(!agents.length){tb.innerHTML=`<tr><td colspan="6" class="px-3 py-3 text-slate-400 dark:text-slate-400">No tmux sessions found.</td></tr>`;return;}
   tb.innerHTML="";
   agents.forEach(a=>{
-    const tcls=VENDOR[a.vendor]||"bg-slate-100 text-slate-600";
+    const tcls=VENDOR[a.vendor]||"bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300";
     const copy=a.resume_cmd||a.session_id||"";
     const tip=copy?`${copy} (click to copy)`:"no resume";
     let sid;
     if(a.session_id){
-      sid=`<span class="sid font-mono text-xs text-slate-600 whitespace-nowrap cursor-pointer hover:text-sky-600" title="${esc(tip)}" data-copy="${esc(copy)}">${esc(a.session_id)}</span>`;
+      sid=`<span class="sid font-mono text-xs text-slate-600 whitespace-nowrap cursor-pointer hover:text-sky-600 dark:text-slate-300 dark:hover:text-sky-400" title="${esc(tip)}" data-copy="${esc(copy)}">${esc(a.session_id)}</span>`;
     }else if(a.kind==="daemon" && a.port){
       // Daemons (gateways) have no session id — show the port they actually listen on instead.
-      sid=`<span class="font-mono text-xs text-slate-500 whitespace-nowrap" title="gateway port">:${a.port}</span>`;
+      sid=`<span class="font-mono text-xs text-slate-500 whitespace-nowrap dark:text-slate-400" title="gateway port">:${a.port}</span>`;
     }else{
-      sid=`<span class="text-xs text-slate-300 cursor-help" title="${esc(tip)}">— none</span>`;
+      sid=`<span class="text-xs text-slate-300 cursor-help dark:text-slate-400" title="${esc(tip)}">— none</span>`;
     }
-    const ok=a.alive; const dot=ok?"bg-emerald-500":"bg-slate-300";
+    const ok=a.alive; const dot=ok?"bg-emerald-500":"bg-slate-300 dark:bg-slate-600";
     // A daemon with a health endpoint shows its latency in place of Running/Idle.
     const statusTxt=(a.latency_ms!=null&&ok)?fmtLat(a.latency_ms):(ok?"Running":"Idle");
-    const stCls=ok?"text-slate-600":"text-slate-400";
-    const tr=document.createElement("tr"); tr.className="border-b border-slate-100 last:border-0";
+    const stCls=ok?"text-slate-600 dark:text-slate-300":"text-slate-400 dark:text-slate-400";
+    const tr=document.createElement("tr"); tr.className="border-b border-slate-100 last:border-0 dark:border-slate-800";
     const nameBg=NAME_BG[a.name_color];
     const nameInner=nameBg?`<span class="inline-block rounded px-1.5 py-0.5 ${nameBg}">${esc(a.name)}</span>`:esc(a.name);
     // Only tmux agents can be attached to; daemons (kind "daemon", e.g. OpenClaw/Hermes) aren't in
@@ -212,21 +263,21 @@ function renderAgents(root, agents){
     // column width never jumps).
     const attachCmd=`tmux attach -t "${a.name}"`;
     const nameCell=(a.kind!=="daemon")
-      ? `<span class="agent-name cursor-pointer hover:text-sky-600" data-copy="${esc(attachCmd)}" title="${esc(attachCmd)} (click to copy)">${nameInner}</span>`
+      ? `<span class="agent-name cursor-pointer hover:text-sky-600 dark:hover:text-sky-400" data-copy="${esc(attachCmd)}" title="${esc(attachCmd)} (click to copy)">${nameInner}</span>`
       : nameInner;
     // Telegram deep-link icon for agents bridged to a bot (opens t.me/<bot> in a new tab).
     const tg=a.telegram_url?` <a href="${esc(a.telegram_url)}" target="_blank" rel="noopener" title="Open @${esc(a.telegram_bot)} in Telegram" class="inline-flex align-middle ml-1 hover:opacity-70"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="#229ED9"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.27 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg></a>`:"";
     tr.innerHTML=
-      `<td class="px-2 py-1.5 font-medium text-slate-700 whitespace-nowrap">${nameCell}${tg}</td>`+
+      `<td class="px-2 py-1.5 font-medium text-slate-700 whitespace-nowrap dark:text-slate-200">${nameCell}${tg}</td>`+
       `<td class="px-2 py-1.5 whitespace-nowrap"><span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${tcls}">${esc(a.label)}</span></td>`+
       `<td class="px-2 py-1.5">${sid}</td>`+
-      `<td class="px-2 py-1.5 text-slate-500 text-xs whitespace-nowrap">${a.age!=null?"ago "+fmtDuration(a.age):"–"}</td>`+
+      `<td class="px-2 py-1.5 text-slate-500 text-xs whitespace-nowrap dark:text-slate-400">${a.age!=null?"ago "+fmtDuration(a.age):"–"}</td>`+
       `<td class="px-2 py-1.5"><span class="inline-flex items-center gap-1.5 whitespace-nowrap ${stCls}"><span class="h-2 w-2 rounded-full ${dot} shrink-0"></span>${statusTxt}</span></td>`+
       // Per-row actions: ↻ restart, ✕ stop. Small icons at the very end of the row.
       `<td class="px-2 py-1.5 text-right whitespace-nowrap">`+
-        `<button class="agent-act inline-flex align-middle p-1 rounded text-slate-400 hover:text-sky-600 hover:bg-slate-100" data-act="restart" data-name="${esc(a.name)}" title="Restart ${esc(a.name)}">`+
+        `<button data-act="restart" data-name="${esc(a.name)}" title="Restart ${esc(a.name)}" class="agent-act inline-flex align-middle p-1 rounded text-slate-400 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:focus-visible:ring-sky-400">`+
           `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>`+
-        `<button class="agent-act inline-flex align-middle p-1 ml-0.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50" data-act="stop" data-name="${esc(a.name)}" title="Stop ${esc(a.name)}">`+
+        `<button data-act="stop" data-name="${esc(a.name)}" title="Stop ${esc(a.name)}" class="agent-act inline-flex align-middle p-1 ml-0.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:text-slate-400 dark:hover:text-rose-400 dark:hover:bg-rose-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 dark:focus-visible:ring-rose-400">`+
           `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`+
       `</td>`;
     tb.appendChild(tr);
