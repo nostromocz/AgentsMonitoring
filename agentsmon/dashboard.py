@@ -293,7 +293,7 @@ async function refresh(){
     }
     const sections=box.querySelectorAll("section");
     d.services.forEach((s,i)=>{ const root=sections[i]; q(root,".svc-name").textContent=s.name; renderService(root,s); });
-    document.getElementById("footer").textContent="updated "+new Date().toLocaleTimeString()+" · auto-refresh";
+    document.getElementById("footer").textContent="updated "+new Date().toLocaleTimeString("cs-CZ",{hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false,timeZone:"Europe/Prague"})+" · auto-refresh";
   }catch(e){document.getElementById("footer").textContent="connection lost…";}
 }
 function copyText(text){
