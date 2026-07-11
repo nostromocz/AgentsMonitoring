@@ -120,6 +120,10 @@ username + password (defaulting to *yes* whenever you bind it to anything other 
 If enabled, the dashboard requires HTTP Basic auth; the password is stored only as a SHA-256
 hash (`dashboard.auth.pwhash`), never in plaintext. Remove the `auth` block to turn it off.
 
+**Dashboard theme.** Use the theme selector in the top-right corner to choose **Auto**, **Light**,
+or **Dark**. Auto follows the operating-system preference, while an explicit Light or Dark choice
+is saved locally in the browser. The selection does not change server configuration.
+
 - **services[]** — components you want **uptime history + SLA** for (a gateway, a bridge, a
   daemon): each has a `name` (its dashboard card title), a `process` pattern and/or a
   `health_url`. The dashboard probes them on `probe.interval_seconds`, stores samples in a local
