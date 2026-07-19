@@ -381,7 +381,7 @@ def _tg_link(value: str) -> tuple[str, str]:
 
 def _agents_state(cfg: dict) -> list[dict]:
     """Pinned daemons (OpenClaw/Hermes…) first, then running tmux agents, with config display
-    overrides (tag → label, vendor → tag colour) applied."""
+    overrides (tag → label, vendor → tag colour, name_color → name highlight) applied."""
     overrides = {a["name"]: a for a in cfg.get("agents", []) if a.get("name")}
     tmux = [a for a in detect.discover_agents(config.agent_matches(cfg)) if a["alive"]]
     for a in tmux:
@@ -390,6 +390,8 @@ def _agents_state(cfg: dict) -> list[dict]:
             a["label"] = ov["tag"]
         if ov.get("vendor"):
             a["vendor"] = ov["vendor"]
+        if ov.get("name_color"):
+            a["name_color"] = ov["name_color"]
         if ov.get("restart"):
             a["resume_cmd"] = ov["restart"]
     agents = detect.pinned_agents(cfg.get("pinned_daemons", [])) + tmux
