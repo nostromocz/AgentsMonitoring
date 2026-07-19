@@ -1,16 +1,18 @@
 """Service probing — record an up/down sample for each configured service.
 
-A *service* is anything you want SLA/uptime history for (a daemon, a gateway, a bridge): it has a
-``process`` pattern (pgrep) and/or a ``health_url``. ``probe_once`` writes one sample per service
-to the uptime DB. The dashboard runs this on a background thread, so simply leaving the dashboard
-open builds the history — no separate probe service required.
+A *service* is anything you want SLA/uptime history for (a daemon, gateway, or platform): it has a
+``process`` pattern, ``health_url``, or specialised ``kind``. ``probe_once`` writes one sample per
+service to the uptime DB. The dashboard runs this on a background thread, so simply leaving the
+dashboard open builds the history — no separate probe service required.
 """
 from __future__ import annotations
 
 import http.client
+import json
 import subprocess
 import time
 import urllib.parse
+from pathlib import Path
 
 from . import db
 
@@ -49,6 +51,40 @@ def _http(url: str, timeout: float = 4) -> tuple[bool, float | None]:
                 pass
 
 
+def _safe_runtime_state(value: object, allowed: set[str]) -> str:
+    return value if isinstance(value, str) and value in allowed else "other"
+
+
+def _hermes_platform_health(service: dict) -> tuple[bool, float | None, str]:
+    """Require both a live Hermes gateway and a connected runtime platform state."""
+    http_ok, latency = _http(service.get("health_url", ""))
+    if not http_ok:
+        return False, latency, "gateway=down"
+    try:
+        state = json.loads(Path(service["state_file"]).expanduser().read_text("utf-8"))
+        platform = service["platform"]
+        if not isinstance(state, dict) or not isinstance(platform, str):
+            raise ValueError("invalid runtime state schema")
+        if not platform or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for ch in platform):
+            raise ValueError("invalid platform name")
+        platforms = state.get("platforms")
+        platform_record = platforms.get(platform) if isinstance(platforms, dict) else None
+        if not isinstance(platform_record, dict):
+            raise ValueError("invalid platform state schema")
+        gateway_state = state.get("gateway_state")
+        platform_state = platform_record.get("state")
+    except (KeyError, OSError, TypeError, ValueError):
+        return False, latency, "gateway=unknown platform=unknown"
+    safe_gateway = _safe_runtime_state(
+        gateway_state, {"running", "starting", "draining", "stopping", "stopped", "startup_failed"}
+    )
+    safe_platform = _safe_runtime_state(
+        platform_state, {"connected", "connecting", "reconnecting", "disconnected", "failed"}
+    )
+    detail = f"gateway={safe_gateway} {platform}={safe_platform}"
+    return gateway_state == "running" and platform_state == "connected", latency, detail
+
+
 def _system_health(cfg: dict) -> tuple[bool, float | None, str]:
     """Availability of the **whole multi-agent system**, not any single component.
 
@@ -74,6 +110,14 @@ def _system_health(cfg: dict) -> tuple[bool, float | None, str]:
     checks += [s for s in cfg.get("services", []) if s.get("kind") != "system"]
     for c in checks:
         name = c.get("name") or c.get("process") or c.get("pattern") or "?"
+        if c.get("kind") == "hermes_platform":
+            ok, lat, _detail = _hermes_platform_health(c)
+            url = c.get("health_url") or name
+            if lat is not None:
+                lats.setdefault(url, lat)
+            if not ok:
+                down.append(name)
+            continue
         url = c.get("health_url")
         if url:
             ok, lat = _http(url)
@@ -103,6 +147,10 @@ def probe_once(cfg: dict) -> None:
             continue
         if s.get("kind") == "system":
             ok, lat, detail = _system_health(cfg)
+            db.record(name, ok, lat, detail)
+            continue
+        if s.get("kind") == "hermes_platform":
+            ok, lat, detail = _hermes_platform_health(s)
             db.record(name, ok, lat, detail)
             continue
         proc = _proc_up(s.get("process", ""))

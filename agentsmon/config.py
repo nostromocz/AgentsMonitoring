@@ -26,8 +26,8 @@ DEFAULTS = {
     "agents": [],
     # Background daemons to watch live (not in tmux), no history. Each: name, pattern, health_url?, restart?
     "daemons": [],
-    # Services to track with uptime history + SLA + timeline. Each: name, process (pgrep), health_url?
-    # Rendered as their own dashboard card (e.g. "Multi-agent system availability", "Telegram Bridge Status").
+    # Services to track with uptime history + SLA + timeline. Each: name and either a process,
+    # health_url, or specialised kind (e.g. system or hermes_platform).
     "services": [],
     # Non-tmux processes to pin at the TOP of the Persistent-agents table (e.g. OpenClaw, Hermes).
     # Each: name, process (pgrep -f), tag (display label), vendor (anthropic|openai|google for the tag colour).

@@ -124,11 +124,18 @@ hash (`dashboard.auth.pwhash`), never in plaintext. Remove the `auth` block to t
 or **Dark**. Auto follows the operating-system preference, while an explicit Light or Dark choice
 is saved locally in the browser. The selection does not change server configuration.
 
-- **services[]** — components you want **uptime history + SLA** for (a gateway, a bridge, a
-  daemon): each has a `name` (its dashboard card title), a `process` pattern and/or a
-  `health_url`. The dashboard probes them on `probe.interval_seconds`, stores samples in a local
-  SQLite, and renders a card with current status, **current uptime**, **SLA %** over
-  `probe.sla_window_days`, and a timeline. (e.g. the "Telegram Bridge Status" card.)
+- **services[]** — components you want **uptime history + SLA** for (a gateway, platform,
+  or daemon): each has a `name` (its dashboard card title) and either a `process` pattern,
+  `health_url`, or a specialised `kind`. The dashboard probes them on `probe.interval_seconds`,
+  stores samples in a local SQLite database, and renders a card with current status,
+  **current uptime**, **SLA %** over `probe.sla_window_days`, and a timeline.
+- **Hermes platform card** — `{ "name": "Hermes Telegram Gateway", "kind":
+  "hermes_platform", "platform": "telegram", "health_url":
+  "http://127.0.0.1:8642/health", "state_file": "~/.hermes/gateway_state.json" }`. It is up only
+  when the Hermes health endpoint responds **and** the local runtime state reports both
+  `gateway_state: running` and `platforms.telegram.state: connected`. Setup/update auto-adds this
+  token-free card when Telegram is present in Hermes runtime state and removes obsolete
+  Agent2Telegram monitoring entries. Historical samples remain under their original service name.
 - **the system card** — a special synthetic service `{ "name": "Multi-Agent System
   Availability", "kind": "system", "metric": "system_latency" }` (added by setup). It isn't tied
   to one component: it is **up only when every monitored agent + daemon is up**, so its timeline
