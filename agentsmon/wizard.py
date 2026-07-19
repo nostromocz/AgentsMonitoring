@@ -228,6 +228,37 @@ def _telegram_bridge_service() -> dict | None:
             "health_url": "https://api.telegram.org/"}
 
 
+def _hermes_gateway_state_file() -> Path:
+    """Hermes runtime state location, respecting a custom HERMES_HOME when configured."""
+    home = os.environ.get("HERMES_HOME")
+    return Path(home).expanduser() / "gateway_state.json" if home else Path.home() / ".hermes" / "gateway_state.json"
+
+
+def _hermes_platform_service(platform: str = "telegram") -> dict | None:
+    """Build a token-free service entry when Hermes has a runtime record for *platform*."""
+    state_file = _hermes_gateway_state_file()
+    try:
+        state = json.loads(state_file.read_text("utf-8"))
+        platforms = state.get("platforms") if isinstance(state, dict) else None
+        if not isinstance(platforms, dict) or not isinstance(platforms.get(platform), dict):
+            return None
+        # An empty or malformed record is not evidence of a replacement monitor.
+        if not isinstance(state.get("gateway_state"), str) or not state["gateway_state"]:
+            return None
+        platform_state = platforms[platform].get("state")
+        if not isinstance(platform_state, str) or not platform_state:
+            return None
+    except (OSError, TypeError, ValueError):
+        return None
+    return {
+        "name": "Hermes Telegram Gateway" if platform == "telegram" else f"Hermes {platform.title()} Gateway",
+        "kind": "hermes_platform",
+        "platform": platform,
+        "health_url": "http://127.0.0.1:8642/health",
+        "state_file": str(state_file),
+    }
+
+
 def _parse_selection(text: str, n: int) -> set:
     """Parse a checklist answer: '' or 'all' → everything, 'none' → nothing, else the listed
     numbers (comma/space separated)."""
@@ -322,11 +353,17 @@ SYSTEM_SERVICE = {"name": "Multi-Agent System Availability", "kind": "system",
 
 
 def migrate_config(cfg: dict) -> bool:
-    """Bring an older config up to the current schema. Currently: replace the per-daemon
-    availability cards (OpenClaw/Hermes, or an OpenClaw-health card) with the single synthetic
-    *Multi-Agent System Availability* card, while keeping genuinely separate cards (e.g. the
-    Telegram Bridge). Idempotent. Returns True if anything changed."""
+    """Bring an older config up to the current schema, including replacing the legacy
+    Agent2Telegram availability/keepalive entries with a token-free Hermes platform monitor.
+    Existing SQLite samples are deliberately untouched and stay under their original series name.
+    Idempotent. Returns True if anything changed.
+    """
     svcs = cfg.get("services", [])
+    hermes_platform = _hermes_platform_service("telegram")
+    replace_bridge = bool(hermes_platform) or any(
+        s.get("kind") == "hermes_platform" and s.get("platform") == "telegram"
+        and s.get("source") != "module" for s in svcs
+    )
     pinned_pats = {d.get("process") for d in cfg.get("pinned_daemons", []) if d.get("process")}
     pinned_names = {d.get("name") for d in cfg.get("pinned_daemons", []) if d.get("name")}
     kept = []
@@ -334,16 +371,40 @@ def migrate_config(cfg: dict) -> bool:
         if s.get("kind") == "system":
             continue                                   # re-inserted canonically below
         url = s.get("health_url") or ""
+        if (s.get("name") == "Telegram Bridge Status"
+                and s.get("process") == "agent2telegram run"
+                and url.rstrip("/") == "https://api.telegram.org"):
+            if not replace_bridge:
+                kept.append(s)
+            continue                                   # replace only with Hermes monitoring
+        if s.get("kind") == "hermes_platform":
+            kept.append(s)
+            continue
         is_daemon_card = (s.get("process") in pinned_pats or s.get("name") in pinned_names
                           or url.endswith(":18789/health")
                           or s.get("name") == "Multi-Agent System Availability")
         if not is_daemon_card:
             kept.append(s)
+
+    if hermes_platform and not any(
+        s.get("kind") == "hermes_platform" and s.get("platform") == "telegram" for s in kept
+    ):
+        kept.append(hermes_platform)
     new_services = [dict(SYSTEM_SERVICE)] + kept
+
     changed = False
     if new_services != svcs:
         cfg["services"] = new_services
         changed = True
+
+    daemons = cfg.get("daemons", [])
+    new_daemons = [d for d in daemons if not (replace_bridge and
+        d.get("name") == "Telegram Bridge" and d.get("pattern") == "agent2telegram run"
+    )]
+    if new_daemons != daemons:
+        cfg["daemons"] = new_daemons
+        changed = True
+
     # Backfill the Telegram @username for known daemons (OpenClaw/Hermes) that don't have one yet,
     # so their t.me icon appears on existing installs without a re-setup.
     for pin in cfg.get("pinned_daemons", []):
@@ -398,21 +459,25 @@ def add() -> int:
     if not config.DEFAULT_PATH.exists():
         print("No config yet — run 'agentsmon setup' first.")
         return 1
-    cfg = config.load()
-    # Ensure the synthetic system availability card exists (configs from before it was introduced
-    # won't have it). It carries the health of the whole system, not any single daemon.
-    svcs = cfg.setdefault("services", [])
-    if not any(s.get("kind") == "system" for s in svcs):
-        svcs.insert(0, dict(SYSTEM_SERVICE))
+    cfg = config.load(include_modules=False)
+    migrated = migrate_config(cfg)
     known = set()
     for key in ("agents", "daemons", "services", "pinned_daemons"):
         known |= {x.get("name") for x in cfg.get(key, []) if x.get("name")}
     candidates = _scan_candidates(known)
-    tb = _telegram_bridge_service()
-    if tb and tb["name"] not in known:
-        candidates.append({"kind": "bridge", "obj": tb, "display": "Telegram Bridge Status"})
+    if not any(s.get("kind") == "hermes_platform" and s.get("platform") == "telegram"
+               for s in cfg.get("services", [])):
+        tb = _telegram_bridge_service()
+        if tb and tb["name"] not in known:
+            candidates.append({"kind": "bridge", "obj": tb, "display": "Telegram Bridge Status"})
     if not candidates:
-        print("Nothing new — everything detected is already monitored. ✓")
+        if migrated:
+            config.save(cfg)
+            print("Monitoring config migrated. Reloading the boot service + dashboard…")
+            service.install()
+            print("Done — monitoring config updated. ✓")
+        else:
+            print("Nothing new — everything detected is already monitored. ✓")
         return 0
     print("New (not yet monitored). Select which to add:\n")
     for i, c in enumerate(candidates, 1):
@@ -436,7 +501,12 @@ def add() -> int:
                                                       "pattern": "agent2telegram run", "restart": r})
         added += 1
     if not added:
-        print("Nothing selected.")
+        if migrated:
+            config.save(cfg)
+            service.install()
+            print("Monitoring config migrated. ✓")
+        else:
+            print("Nothing selected.")
         return 0
     config.save(cfg)
     print(f"\n✓ Added {added}. Reloading the boot service + dashboard…")
@@ -497,7 +567,7 @@ def new() -> int:
         return 1
     subprocess.run(["tmux", "send-keys", "-t", name, chosen["launch"], "Enter"], capture_output=True)
 
-    cfg = config.load()
+    cfg = config.load(include_modules=False)
     cfg.setdefault("agents", []).append({
         "name": name, "label": chosen["label"], "match": MATCH_KEYWORD[chosen["kind"]],
         "restart": chosen["restart"], "cwd": cwd, "enabled": True})
@@ -553,7 +623,7 @@ def run() -> int:
     host = "0.0.0.0" if expose else "127.0.0.1"
     port = _ask("Dashboard port", "8765")
 
-    cfg = config.load()
+    cfg = config.load(include_modules=False)
     cfg["dashboard"].update({"host": host, "port": int(port) if port.isdigit() else 8765})
     if expose:
         print("⚠️  Exposed beyond localhost — a login is strongly recommended.")
@@ -581,15 +651,19 @@ def run() -> int:
         dmn, pin = _daemon_entries(d)
         cfg["daemons"].append(dmn)
         cfg["pinned_daemons"].append(pin)
-    # Auto-add a Telegram Bridge availability card if an Agent2Telegram bridge is running,
-    # AND keep it alive (restart from its current command line, so it returns after a reboot).
-    tb = _telegram_bridge_service()
-    if tb:
-        cfg["services"].append(tb)
-        restart = _bridge_restart_cmd()
-        if restart:
-            cfg["daemons"].append({"name": "Telegram Bridge", "pattern": "agent2telegram run",
-                                   "restart": restart})
+    # Add a separate SLA card for the active Hermes Telegram adapter. This reads only the local
+    # runtime state and requires the live Hermes health endpoint; no bot token is stored or sent.
+    hermes_telegram = _hermes_platform_service("telegram")
+    if hermes_telegram:
+        cfg["services"].append(hermes_telegram)
+    else:
+        tb = _telegram_bridge_service()
+        if tb:
+            cfg["services"].append(tb)
+            restart = _bridge_restart_cmd()
+            if restart:
+                cfg["daemons"].append({"name": "Telegram Bridge", "pattern": "agent2telegram run",
+                                       "restart": restart})
     path = config.save(cfg)
     print(f"\n✓ Saved config to {path}")
     print(f"  Supervising {len(agents)} agent(s), watching {len(daemons)} daemon(s).")

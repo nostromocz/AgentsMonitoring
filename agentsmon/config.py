@@ -26,8 +26,8 @@ DEFAULTS = {
     "agents": [],
     # Background daemons to watch live (not in tmux), no history. Each: name, pattern, health_url?, restart?
     "daemons": [],
-    # Services to track with uptime history + SLA + timeline. Each: name, process (pgrep), health_url?
-    # Rendered as their own dashboard card (e.g. "Multi-agent system availability", "Telegram Bridge Status").
+    # Services to track with uptime history + SLA + timeline. Each: name and either a process,
+    # health_url, or specialised kind (e.g. system or hermes_platform).
     "services": [],
     # Non-tmux processes to pin at the TOP of the Persistent-agents table (e.g. OpenClaw, Hermes).
     # Each: name, process (pgrep -f), tag (display label), vendor (anthropic|openai|google for the tag colour).
@@ -52,7 +52,8 @@ def _expand(obj):
     return obj
 
 
-def load(path: Path | None = None) -> dict:
+def load(path: Path | None = None, *, include_modules: bool = True) -> dict:
+    """Load config; omit discovered modules for read-modify-save operations."""
     path = path or DEFAULT_PATH
     cfg = json.loads(json.dumps(DEFAULTS))   # deep copy
     if path.exists():
@@ -62,7 +63,8 @@ def load(path: Path | None = None) -> dict:
                 cfg[k].update(v)
             else:
                 cfg[k] = v
-    cfg["services"] = list(cfg.get("services", [])) + discover_modules(cfg)
+    if include_modules:
+        cfg["services"] = list(cfg.get("services", [])) + discover_modules(cfg)
     return cfg
 
 
@@ -125,7 +127,10 @@ def discover_modules(cfg: dict) -> list[dict]:
 def save(cfg: dict, path: Path | None = None) -> Path:
     path = path or DEFAULT_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    persisted = dict(cfg)
+    if "services" in persisted:
+        persisted["services"] = [s for s in cfg["services"] if s.get("source") != "module"]
+    path.write_text(json.dumps(persisted, indent=2, ensure_ascii=False), encoding="utf-8")
     os.chmod(path, 0o600)
     return path
 

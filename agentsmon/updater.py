@@ -54,7 +54,7 @@ def run() -> int:
     # into the synthetic Multi-Agent System card) so existing installs upgrade cleanly.
     from . import config, wizard
     try:
-        cfg = config.load()
+        cfg = config.load(include_modules=False)
         if wizard.migrate_config(cfg):
             config.save(cfg)
             print("✓ Config migrated to the current layout.")

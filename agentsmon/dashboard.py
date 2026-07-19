@@ -565,7 +565,7 @@ def serve(host: str, port: int) -> None:
     # so this self-heals existing installs without needing a special migration step.
     try:
         from . import wizard
-        cfg0 = config.load()
+        cfg0 = config.load(include_modules=False)
         if wizard.migrate_config(cfg0):
             config.save(cfg0)
     except Exception:
