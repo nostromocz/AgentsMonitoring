@@ -285,19 +285,21 @@ function renderAgents(root, agents){
       : nameInner;
     // Telegram deep-link icon for agents bridged to a bot (opens t.me/<bot> in a new tab).
     const tg=a.telegram_url?` <a href="${esc(a.telegram_url)}" target="_blank" rel="noopener" title="Open @${esc(a.telegram_bot)} in Telegram" class="inline-flex align-middle ml-1 hover:opacity-70"><svg viewBox="0 0 24 24" class="h-4 w-4" fill="#229ED9"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.27 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg></a>`:"";
+    // Per-row actions are fail-closed. The backend supplies actions_enabled only for entries
+    // explicitly opted in with dashboard_actions=true.
+    const actions=a.actions_enabled
+      ? `<button data-act="restart" data-name="${esc(a.name)}" title="Restart ${esc(a.name)}" class="agent-act inline-flex align-middle p-1 rounded text-slate-400 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:focus-visible:ring-sky-400">`+
+          `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>`+
+        `<button data-act="stop" data-name="${esc(a.name)}" title="Stop ${esc(a.name)}" class="agent-act inline-flex align-middle p-1 ml-0.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:text-slate-400 dark:hover:text-rose-400 dark:hover:bg-rose-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 dark:focus-visible:ring-rose-400">`+
+          `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`
+      : "";
     tr.innerHTML=
       `<td class="px-2 py-1.5 font-medium text-slate-700 whitespace-nowrap dark:text-slate-200">${nameCell}${tg}</td>`+
       `<td class="px-2 py-1.5 whitespace-nowrap"><span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${tcls}">${esc(a.label)}</span></td>`+
       `<td class="px-2 py-1.5">${sid}</td>`+
       `<td class="px-2 py-1.5 text-slate-500 text-xs whitespace-nowrap dark:text-slate-400">${a.age!=null?"ago "+fmtDuration(a.age):"–"}</td>`+
       `<td class="px-2 py-1.5"><span class="inline-flex items-center gap-1.5 whitespace-nowrap ${stCls}"><span class="h-2 w-2 rounded-full ${dot} shrink-0"></span>${statusTxt}</span></td>`+
-      // Per-row actions: ↻ restart, ✕ stop. Small icons at the very end of the row.
-      `<td class="px-2 py-1.5 text-right whitespace-nowrap">`+
-        `<button data-act="restart" data-name="${esc(a.name)}" title="Restart ${esc(a.name)}" class="agent-act inline-flex align-middle p-1 rounded text-slate-400 hover:text-sky-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-sky-400 dark:hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:focus-visible:ring-sky-400">`+
-          `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>`+
-        `<button data-act="stop" data-name="${esc(a.name)}" title="Stop ${esc(a.name)}" class="agent-act inline-flex align-middle p-1 ml-0.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:text-slate-400 dark:hover:text-rose-400 dark:hover:bg-rose-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 dark:focus-visible:ring-rose-400">`+
-          `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`+
-      `</td>`;
+      `<td class="px-2 py-1.5 text-right whitespace-nowrap">${actions}</td>`;
     tb.appendChild(tr);
   });
 }
@@ -442,6 +444,13 @@ def _agents_state(cfg: dict) -> list[dict]:
                 if m:
                     a["session_id"] = m.group(0)
     agents = detect.pinned_agents(cfg.get("pinned_daemons", [])) + tmux
+    action_policy = {
+        entry["name"]: bool(entry.get("dashboard_actions", False))
+        for entry in (cfg.get("agents", []) + cfg.get("daemons", []))
+        if entry.get("name")
+    }
+    for a in agents:
+        a["actions_enabled"] = action_policy.get(a.get("name"), False)
     # Telegram deep-link icon. Two sources, explicit wins:
     #  1) an explicit `telegram` field on an agent/daemon config entry (for daemons with their OWN
     #     native bot, e.g. OpenClaw/Hermes) — value is a @username or a full t.me URL;
@@ -487,6 +496,10 @@ def _agent_action(name: str, action: str) -> tuple[bool, str]:
     daemon = next((d for d in cfg.get("daemons", []) if d.get("name") == name), None)
     if not agent and not daemon:
         return False, f"unknown agent '{name}'"
+    target = agent if agent is not None else daemon
+    assert target is not None  # established by the unknown-agent guard above
+    if not target.get("dashboard_actions", False):
+        return False, f"dashboard actions are not allowed for '{name}'"
     if action == "restart":
         # Re-enable (in case it was stopped) and relaunch fresh so it picks up new config (e.g. MCP).
         _set_enabled(name, True)
