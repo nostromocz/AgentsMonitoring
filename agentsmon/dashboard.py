@@ -421,6 +421,18 @@ def _tg_link(value: str) -> tuple[str, str]:
     return f"https://t.me/{uname}", uname
 
 
+def _dashboard_actions_allowed(cfg: dict, name: str | None) -> bool:
+    """Allow destructive actions only for one unambiguous, explicitly opted-in config row."""
+    if not name:
+        return False
+    matches = [
+        entry
+        for entry in (cfg.get("agents", []) + cfg.get("daemons", []))
+        if entry.get("name") == name
+    ]
+    return len(matches) == 1 and matches[0].get("dashboard_actions") is True
+
+
 def _agents_state(cfg: dict) -> list[dict]:
     """Pinned daemons (OpenClaw/Hermes…) first, then running tmux agents, with config display
     overrides (tag → label, vendor → tag colour, name_color → name highlight) applied."""
@@ -444,13 +456,8 @@ def _agents_state(cfg: dict) -> list[dict]:
                 if m:
                     a["session_id"] = m.group(0)
     agents = detect.pinned_agents(cfg.get("pinned_daemons", [])) + tmux
-    action_policy = {
-        entry["name"]: bool(entry.get("dashboard_actions", False))
-        for entry in (cfg.get("agents", []) + cfg.get("daemons", []))
-        if entry.get("name")
-    }
     for a in agents:
-        a["actions_enabled"] = action_policy.get(a.get("name"), False)
+        a["actions_enabled"] = _dashboard_actions_allowed(cfg, a.get("name"))
     # Telegram deep-link icon. Two sources, explicit wins:
     #  1) an explicit `telegram` field on an agent/daemon config entry (for daemons with their OWN
     #     native bot, e.g. OpenClaw/Hermes) — value is a @username or a full t.me URL;
@@ -498,7 +505,7 @@ def _agent_action(name: str, action: str) -> tuple[bool, str]:
         return False, f"unknown agent '{name}'"
     target = agent if agent is not None else daemon
     assert target is not None  # established by the unknown-agent guard above
-    if not target.get("dashboard_actions", False):
+    if not _dashboard_actions_allowed(cfg, name):
         return False, f"dashboard actions are not allowed for '{name}'"
     if action == "restart":
         # Re-enable (in case it was stopped) and relaunch fresh so it picks up new config (e.g. MCP).
