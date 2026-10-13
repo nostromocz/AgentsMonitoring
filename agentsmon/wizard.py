@@ -168,19 +168,18 @@ def primary_ip() -> str:
         return ip
     except Exception:
         return "127.0.0.1"
+HERMES_PROCESS_PATTERN = r"/(hermes|python3).*gateway run$"
+
 COMMON_DAEMONS = [
     {"name": "OpenClaw", "pattern": "openclaw", "binary": "openclaw", "name_color": "red",
      "health_url": "http://127.0.0.1:18789/health",
      "restart": "nohup openclaw gateway > ~/openclaw.log 2>&1 &"},
-    # Liveness = health_url OR process match (either signal counts, see detect.daemon_status),
-    # so a health-endpoint change in a new Hermes version can't blind us while the process runs.
     # The pattern must match BOTH Hermes launch forms: the old `…/bin/hermes gateway run` AND the
     # current venv/pip form `…python -m hermes_cli.main gateway run`. A bare "hermes gateway"
     # matches only the old form (the new one has `hermes_cli.main gateway`, no "hermes gateway"),
     # so we alternate. Neither form matches the OpenClaw node gateway (`…/index.js gateway`).
-    {"name": "Hermes", "pattern": r"hermes gateway run|hermes_cli\.main gateway",
+    {"name": "Hermes", "pattern": HERMES_PROCESS_PATTERN,
      "binary": "hermes", "name_color": "gold",
-     "health_url": "http://127.0.0.1:8642/health",
      "restart": "nohup hermes gateway run --replace > ~/hermes.log 2>&1 &"},
 ]
 
@@ -254,7 +253,6 @@ def _hermes_platform_service(platform: str = "telegram") -> dict | None:
         "name": "Hermes Telegram Gateway" if platform == "telegram" else f"Hermes {platform.title()} Gateway",
         "kind": "hermes_platform",
         "platform": platform,
-        "health_url": "http://127.0.0.1:8642/health",
         "state_file": str(state_file),
     }
 
@@ -378,7 +376,11 @@ def migrate_config(cfg: dict) -> bool:
                 kept.append(s)
             continue                                   # replace only with Hermes monitoring
         if s.get("kind") == "hermes_platform":
-            kept.append(s)
+            if (hermes_platform and s.get("platform") == hermes_platform.get("platform")
+                    and s.get("source") != "module"):
+                kept.append(dict(hermes_platform))
+            else:
+                kept.append(s)
             continue
         is_daemon_card = (s.get("process") in pinned_pats or s.get("name") in pinned_names
                           or url.endswith(":18789/health")
@@ -398,9 +400,14 @@ def migrate_config(cfg: dict) -> bool:
         changed = True
 
     daemons = cfg.get("daemons", [])
-    new_daemons = [d for d in daemons if not (replace_bridge and
+    new_daemons = [dict(d) for d in daemons if not (replace_bridge and
         d.get("name") == "Telegram Bridge" and d.get("pattern") == "agent2telegram run"
     )]
+    for daemon in new_daemons:
+        if daemon.get("name") == "Hermes":
+            daemon["pattern"] = HERMES_PROCESS_PATTERN
+            if daemon.get("health_url") == "http://127.0.0.1:8642/health":
+                del daemon["health_url"]
     if new_daemons != daemons:
         cfg["daemons"] = new_daemons
         changed = True
@@ -408,6 +415,13 @@ def migrate_config(cfg: dict) -> bool:
     # Backfill the Telegram @username for known daemons (OpenClaw/Hermes) that don't have one yet,
     # so their t.me icon appears on existing installs without a re-setup.
     for pin in cfg.get("pinned_daemons", []):
+        if pin.get("name") == "Hermes":
+            if pin.get("process") != HERMES_PROCESS_PATTERN:
+                pin["process"] = HERMES_PROCESS_PATTERN
+                changed = True
+            if pin.get("health_url") == "http://127.0.0.1:8642/health":
+                del pin["health_url"]
+                changed = True
         if pin.get("name") and not pin.get("telegram"):
             bot = detect.daemon_telegram_bot(pin["name"])
             if bot:

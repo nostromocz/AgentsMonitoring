@@ -13,6 +13,7 @@ import os
 import subprocess
 import time
 import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import db
@@ -97,11 +98,36 @@ def _safe_runtime_state(value: object, allowed: set[str]) -> str:
     return value if isinstance(value, str) and value in allowed else "other"
 
 
+def _live_runtime_record(state: dict, max_age_seconds: int = 185) -> bool:
+    """Validate liveness when Hermes exposes runtime state but no HTTP API server."""
+    pid = state.get("pid")
+    updated_at = state.get("updated_at")
+    if not isinstance(pid, int) or pid <= 1 or not isinstance(updated_at, str):
+        return False
+    try:
+        os.kill(pid, 0)
+        stamp = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            return False
+        age = (datetime.now(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds()
+    except (OSError, ValueError, OverflowError):
+        return False
+    return -30 <= age <= max_age_seconds
+
+
 def _hermes_platform_health(service: dict) -> tuple[bool, float | None, str]:
-    """Require both a live Hermes gateway and a connected runtime platform state."""
-    http_ok, latency = _http(service.get("health_url", ""))
-    if not http_ok:
-        return False, latency, "gateway=down"
+    """Require both a live Hermes gateway and a connected runtime platform state.
+
+    An explicitly configured health URL remains authoritative. Newer Hermes gateways may run
+    without the optional API server; in that case the gateway's fresh, PID-bound runtime record
+    is the liveness signal.
+    """
+    health_url = service.get("health_url")
+    latency = None
+    if health_url:
+        http_ok, latency = _http(health_url)
+        if not http_ok:
+            return False, latency, "gateway=down"
     try:
         state = json.loads(Path(service["state_file"]).expanduser().read_text("utf-8"))
         platform = service["platform"]
@@ -117,6 +143,8 @@ def _hermes_platform_health(service: dict) -> tuple[bool, float | None, str]:
         platform_state = platform_record.get("state")
     except (KeyError, OSError, TypeError, ValueError):
         return False, latency, "gateway=unknown platform=unknown"
+    if not health_url and not _live_runtime_record(state):
+        return False, latency, "gateway=down"
     safe_gateway = _safe_runtime_state(
         gateway_state, {"running", "starting", "draining", "stopping", "stopped", "startup_failed"}
     )

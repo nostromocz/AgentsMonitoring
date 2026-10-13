@@ -1,6 +1,8 @@
 import json
+import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +10,28 @@ from agentsmon import probe
 
 
 class HermesPlatformHealthTests(unittest.TestCase):
+    def test_connected_platform_without_http_uses_fresh_live_runtime_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            state_file = Path(td) / "gateway_state.json"
+            state_file.write_text(json.dumps({
+                "pid": os.getpid(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "gateway_state": "running",
+                "platforms": {"telegram": {"state": "connected"}},
+            }))
+            service = {
+                "kind": "hermes_platform",
+                "platform": "telegram",
+                "state_file": str(state_file),
+            }
+
+            with patch.object(probe, "_http", side_effect=AssertionError("HTTP must be optional")):
+                up, latency, detail = probe._hermes_platform_health(service)
+
+        self.assertTrue(up)
+        self.assertIsNone(latency)
+        self.assertEqual(detail, "gateway=running telegram=connected")
+
     def test_connected_platform_is_up(self):
         with tempfile.TemporaryDirectory() as td:
             state_file = Path(td) / "gateway_state.json"

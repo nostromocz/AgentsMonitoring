@@ -29,7 +29,6 @@ class HermesPlatformWizardTests(unittest.TestCase):
             "name": "Hermes Telegram Gateway",
             "kind": "hermes_platform",
             "platform": "telegram",
-            "health_url": "http://127.0.0.1:8642/health",
             "state_file": str(state_file),
         })
         serialized = json.dumps(service)
@@ -71,6 +70,42 @@ class HermesPlatformWizardTests(unittest.TestCase):
         ])
         self.assertEqual([d["name"] for d in cfg["daemons"]], ["Hermes"])
         self.assertEqual(cfg["services"].count(new_service), 1)
+
+    def test_migration_removes_obsolete_optional_api_health_url(self):
+        canonical = {
+            "name": "Hermes Telegram Gateway",
+            "kind": "hermes_platform",
+            "platform": "telegram",
+            "state_file": "/home/test/.hermes/gateway_state.json",
+        }
+        existing = dict(canonical, health_url="http://127.0.0.1:8642/health")
+        pinned = {
+            "name": "Hermes",
+            "process": "hermes gateway run|hermes_cli\\.main gateway",
+            "health_url": "http://127.0.0.1:8642/health",
+        }
+        daemon = {
+            "name": "Hermes",
+            "pattern": "hermes gateway run|hermes_cli\\.main gateway",
+            "health_url": "http://127.0.0.1:8642/health",
+        }
+        cfg = {"services": [existing], "daemons": [daemon], "pinned_daemons": [pinned]}
+
+        with (
+            patch.object(wizard, "_hermes_platform_service", return_value=canonical),
+            patch.object(wizard.detect, "daemon_telegram_bot", return_value=None),
+        ):
+            changed = wizard.migrate_config(cfg)
+            changed_again = wizard.migrate_config(cfg)
+
+        self.assertTrue(changed)
+        self.assertFalse(changed_again)
+        service = next(s for s in cfg["services"] if s.get("kind") == "hermes_platform")
+        self.assertEqual(service, canonical)
+        self.assertNotIn("health_url", cfg["pinned_daemons"][0])
+        self.assertEqual(cfg["pinned_daemons"][0]["process"], r"/(hermes|python3).*gateway run$")
+        self.assertNotIn("health_url", cfg["daemons"][0])
+        self.assertEqual(cfg["daemons"][0]["pattern"], r"/(hermes|python3).*gateway run$")
 
     def test_migration_keeps_services_without_the_exact_legacy_signature(self):
         unrelated = [
