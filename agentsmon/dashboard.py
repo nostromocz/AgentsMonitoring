@@ -123,7 +123,7 @@ document.documentElement.classList.toggle("dark",d);
       <div class="rounded-lg border border-slate-200 bg-white p-3 dark:bg-slate-800 dark:border-slate-700">
         <p class="text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-400">Uptime</p>
         <p class="m-uptime text-lg font-semibold mt-0.5">–</p>
-        <p class="text-[11px] text-slate-400 dark:text-slate-400">days ≥98% operational</p>
+        <p class="text-[11px] text-slate-400 dark:text-slate-400">current observed uptime</p>
       </div>
       <div class="rounded-lg border border-slate-200 bg-white p-3 dark:bg-slate-800 dark:border-slate-700">
         <p class="text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-400">Availability</p>
@@ -224,7 +224,7 @@ function renderService(root, s){
   q(root,".svc-head").className="svc-head flex items-center gap-2.5 mb-3 rounded-lg border px-3 py-2 cursor-pointer "+st[3];
   q(root,".svc-dot").className="svc-dot h-3 w-3 rounded-full shrink-0 "+st[0];
   const se=q(root,".svc-state"); se.textContent=st[1]; se.className="svc-state ml-auto text-sm font-medium "+st[2];
-  {const gd=(s.timeline||[]).filter(b=>b.uptime_pct!=null&&b.uptime_pct>=98).length;q(root,".m-uptime").textContent=gd+(gd===1?" day":" days");}
+  q(root,".m-uptime").textContent=s.uptime_seconds!=null?fmtDuration(s.uptime_seconds):"–";
   q(root,".m-sla").textContent=s.sla!=null?s.sla.toFixed(2)+" %":"–";
   q(root,".m-sla-sub").textContent="over "+s.sla_window_days+" days ("+(s.sla_samples||0)+" samples)";
   if(s.metric==="agents"){

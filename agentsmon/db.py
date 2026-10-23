@@ -8,6 +8,7 @@ concurrent read while the probe thread writes).
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 import time
 
 from . import config
@@ -17,27 +18,42 @@ def _path() -> str:
     return str(config.state_dir() / "uptime.sqlite")
 
 
+@contextmanager
+def _db():
+    """Open a transactional connection and always close it afterward."""
+    c = _conn()
+    try:
+        with c:
+            yield c
+    finally:
+        c.close()
+
+
 def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(_path(), timeout=10)
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA busy_timeout=5000")
-    c.execute("""CREATE TABLE IF NOT EXISTS probes(
-        ts INTEGER NOT NULL, service TEXT NOT NULL, up INTEGER NOT NULL,
-        latency REAL, detail TEXT)""")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_probes_service_ts ON probes(service, ts)")
+    try:
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=5000")
+        c.execute("""CREATE TABLE IF NOT EXISTS probes(
+            ts INTEGER NOT NULL, service TEXT NOT NULL, up INTEGER NOT NULL,
+            latency REAL, detail TEXT)""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_probes_service_ts ON probes(service, ts)")
+    except BaseException:
+        c.close()
+        raise
     return c
 
 
 def record(service: str, up: bool, latency: float | None = None, detail: str = "",
            ts: int | None = None) -> None:
-    with _conn() as c:
+    with _db() as c:
         c.execute("INSERT INTO probes(ts,service,up,latency,detail) VALUES(?,?,?,?,?)",
                   (int(ts if ts is not None else time.time()), service, 1 if up else 0, latency, detail))
 
 
 def last(service: str) -> dict | None:
-    with _conn() as c:
+    with _db() as c:
         r = c.execute("SELECT * FROM probes WHERE service=? ORDER BY ts DESC LIMIT 1",
                       (service,)).fetchone()
     return dict(r) if r else None
@@ -46,7 +62,7 @@ def last(service: str) -> dict | None:
 def sla(service: str, window_seconds: int) -> tuple[float | None, int]:
     """(% of samples that were up in the window, sample count)."""
     since = int(time.time()) - window_seconds
-    with _conn() as c:
+    with _db() as c:
         rows = c.execute("SELECT up, COUNT(*) n FROM probes WHERE service=? AND ts>=? GROUP BY up",
                          (service, since)).fetchall()
     total = sum(r["n"] for r in rows)
@@ -58,7 +74,7 @@ def avg_latency(service: str, window_seconds: int) -> float | None:
     """Average health-check latency (seconds) over the window — the card's 'avg latency' metric
     (distinct from the agent row's current latency)."""
     since = int(time.time()) - window_seconds
-    with _conn() as c:
+    with _db() as c:
         r = c.execute("SELECT AVG(latency) a FROM probes WHERE service=? AND ts>=? "
                       "AND latency IS NOT NULL", (service, since)).fetchone()
     return r["a"] if r and r["a"] is not None else None
@@ -70,27 +86,29 @@ def uptime_seconds(service: str, min_outage: int = 3) -> int | None:
     do NOT reset uptime — so this reads as "time since the last real restart/outage", matching how
     a status page reports uptime. Returns 0 if currently down, None if there's no data."""
     now = int(time.time())
-    with _conn() as c:
+    with _db() as c:
         rows = c.execute("SELECT ts, up FROM probes WHERE service=? ORDER BY ts", (service,)).fetchall()
     if not rows:
         return None
     if not rows[-1]["up"]:
         return 0
-    streak_start = int(rows[0]["ts"])
+    streak_start: int | None = None
     run = 0
     for r in rows:
         if not r["up"]:
             run += 1
         else:
-            if run >= min_outage:           # a real outage just ended → uptime restarts here
+            # Observation begins only at the first successful sample.  Once established, only a
+            # qualifying outage resets it; shorter probe blips leave the streak intact.
+            if streak_start is None or run >= min_outage:
                 streak_start = int(r["ts"])
             run = 0
-    return now - streak_start
+    return now - streak_start if streak_start is not None else 0
 
 
 def history_seconds(service: str) -> int:
     """How long we've been recording this service (newest − oldest sample)."""
-    with _conn() as c:
+    with _db() as c:
         r = c.execute("SELECT MIN(ts) a, MAX(ts) b FROM probes WHERE service=?", (service,)).fetchone()
     return int(r["b"] - r["a"]) if r and r["a"] is not None else 0
 
@@ -102,7 +120,7 @@ def timeline(service: str, window_seconds: int, buckets: int) -> list[dict]:
     start = now - window_seconds
     size = max(1, window_seconds // buckets)
     agg = [[0, 0] for _ in range(buckets)]   # [up_samples, total_samples]
-    with _conn() as c:
+    with _db() as c:
         rows = c.execute("SELECT ts, up FROM probes WHERE service=? AND ts>=? ORDER BY ts",
                          (service, start)).fetchall()
     for r in rows:

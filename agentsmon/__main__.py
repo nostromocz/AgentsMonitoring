@@ -43,7 +43,12 @@ def main(argv=None) -> int:
         from . import keepalive
         return keepalive.run(loop=args.loop)
     if args.command == "dashboard":
-        from . import dashboard, config
+        from . import dashboard, config, service
+        try:
+            service.refresh_launcher()
+        except (OSError, ValueError):
+            # Launcher repair is best-effort; an unwritable cron install must not block a manual run.
+            pass
         cfg = config.load()
         dashboard.serve(args.host or cfg["dashboard"]["host"],
                         args.port or cfg["dashboard"]["port"])
